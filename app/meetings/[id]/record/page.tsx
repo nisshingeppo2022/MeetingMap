@@ -131,7 +131,13 @@ export default function RecordPage() {
     runMatch(fullTranscript);
   }, [fullTranscript, started, runMatch]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const fullTranscriptRef = useRef(fullTranscript);
+  const segmentsRef = useRef(segments);
+  const elapsedSecondsRef = useRef(elapsedSeconds);
+  useEffect(() => { fullTranscriptRef.current = fullTranscript; }, [fullTranscript]);
+  useEffect(() => { segmentsRef.current = segments; }, [segments]);
+  useEffect(() => { elapsedSecondsRef.current = elapsedSeconds; }, [elapsedSeconds]);
+
   useEffect(() => {
     if (!audioBlob || !stopping) return;
     async function finalize() {
@@ -139,16 +145,16 @@ export default function RecordPage() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          transcript: fullTranscript,
-          transcriptSegments: segments,
-          durationSeconds: elapsedSeconds,
+          transcript: fullTranscriptRef.current,
+          transcriptSegments: segmentsRef.current,
+          durationSeconds: elapsedSecondsRef.current,
           status: "processing",
         }),
       });
       router.push(`/meetings/${id}/result`);
     }
     finalize();
-  }, [audioBlob, stopping]);
+  }, [audioBlob, stopping, id, router]);
 
   function handleStart() {
     startRecording();

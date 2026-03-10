@@ -598,7 +598,6 @@ function MapInner() {
               />
             </ReactFlow>
           </div>
-          )}
 
           {/* クロスリンク詳細パネル */}
           {selectedCrossLink && (
