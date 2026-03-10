@@ -1,0 +1,198 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Contact {
+  id                String    @id @default(uuid())
+  userId            String    @map("user_id")
+  name              String    @db.VarChar(100)
+  organization      String?   @db.VarChar(200)
+  position          String?   @db.VarChar(100)
+  email             String?   @db.VarChar(200)
+  phone             String?   @db.VarChar(50)
+  businessCardUrl   String?   @map("business_card_url")
+  businessCardOcr   Json?     @map("business_card_ocr")
+  notes             String?
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  meetings        Meeting[]
+  meetingContacts MeetingContact[]
+
+  @@map("contacts")
+}
+
+model Meeting {
+  id                  String        @id @default(uuid())
+  userId              String        @map("user_id")
+  contactId           String?       @map("contact_id")
+  title               String?       @db.VarChar(200)
+  mode                MeetingMode
+  audioUrl            String?       @map("audio_url")
+  durationSeconds     Int?          @map("duration_seconds")
+  transcript          String?
+  transcriptSegments  Json?         @map("transcript_segments")
+  aiAnalysis          Json?         @map("ai_analysis")
+  status              MeetingStatus @default(recording)
+  date                DateTime      @default(now()) @db.Date
+  createdAt           DateTime      @default(now()) @map("created_at")
+  updatedAt           DateTime      @updatedAt @map("updated_at")
+
+  contact             Contact?         @relation(fields: [contactId], references: [id])
+  meetingContacts     MeetingContact[]
+  mindmapNodes        MindmapNode[]
+  topicItemMeetings   TopicItemMeeting[]
+
+  @@map("meetings")
+}
+
+model MeetingContact {
+  id        String   @id @default(uuid())
+  meetingId String   @map("meeting_id")
+  contactId String   @map("contact_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  meeting   Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  contact   Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, contactId])
+  @@map("meeting_contacts")
+}
+
+enum MeetingMode {
+  live
+  import
+  recall
+}
+
+enum MeetingStatus {
+  recording
+  processing
+  completed
+}
+
+model MindmapNode {
+  id          String    @id @default(uuid())
+  meetingId   String    @map("meeting_id")
+  parentId    String?   @map("parent_id")
+  label       String    @db.VarChar(200)
+  nodeType    NodeType  @map("node_type")
+  status      String?   @db.VarChar(50)
+  isVisible   Boolean   @default(true) @map("is_visible")
+  isSecret    Boolean   @default(false) @map("is_secret")
+  isStarred   Boolean   @default(false) @map("is_starred")
+  color       String?   @db.VarChar(20)
+  positionX   Float?    @map("position_x")
+  positionY   Float?    @map("position_y")
+  metadata    Json?
+  sortOrder   Int?      @map("sort_order")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  meeting        Meeting       @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  parent         MindmapNode?  @relation("NodeChildren", fields: [parentId], references: [id])
+  children       MindmapNode[] @relation("NodeChildren")
+  crossLinksFrom CrossLink[]   @relation("CrossLinkFrom")
+  crossLinksTo   CrossLink[]   @relation("CrossLinkTo")
+
+  @@map("mindmap_nodes")
+}
+
+model CrossLink {
+  id                 String            @id @default(uuid())
+  userId             String            @map("user_id")
+  fromNodeId         String            @map("from_node_id")
+  toNodeId           String            @map("to_node_id")
+  strength           CrossLinkStrength @default(medium)
+  category           String?           @db.VarChar(100)
+  categoryColor      String?           @map("category_color") @db.VarChar(20)
+  reason             String?
+  newValueSuggestion String?           @map("new_value_suggestion")
+  isAiGenerated      Boolean           @default(true) @map("is_ai_generated")
+  isAccepted         Boolean?          @map("is_accepted")
+  isVisible          Boolean           @default(true) @map("is_visible")
+  createdAt          DateTime          @default(now()) @map("created_at")
+
+  fromNode           MindmapNode       @relation("CrossLinkFrom", fields: [fromNodeId], references: [id], onDelete: Cascade)
+  toNode             MindmapNode       @relation("CrossLinkTo", fields: [toNodeId], references: [id], onDelete: Cascade)
+
+  @@map("cross_links")
+}
+
+enum CrossLinkStrength {
+  strong
+  medium
+  weak
+}
+
+enum NodeType {
+  root
+  topic
+  item
+  action
+}
+
+model Topic {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  name      String    @db.VarChar(100)
+  icon      String?   @db.VarChar(10)
+  color     String?   @db.VarChar(20)
+  sortOrder Int?      @map("sort_order")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  items     TopicItem[]
+
+  @@map("topics")
+}
+
+model TopicItem {
+  id          String    @id @default(uuid())
+  topicId     String    @map("topic_id")
+  name        String    @db.VarChar(200)
+  description String?
+  status      String?   @db.VarChar(50)
+  isVisible   Boolean   @default(true) @map("is_visible")
+  metadata    Json?
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  topic       Topic     @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  meetings    TopicItemMeeting[]
+
+  @@map("topic_items")
+}
+
+model TopicItemMeeting {
+  id          String    @id @default(uuid())
+  topicItemId String    @map("topic_item_id")
+  meetingId   String    @map("meeting_id")
+  excerpt     String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  topicItem   TopicItem @relation(fields: [topicItemId], references: [id], onDelete: Cascade)
+  meeting     Meeting   @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@map("topic_item_meetings")
+}
+
+model ShareLink {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  token        String    @unique @db.VarChar(64)
+  viewType     ViewType  @map("view_type")
+  filterConfig Json?     @map("filter_config")
+  expiresAt    DateTime? @map("expires_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@map("share_links")
+}
+
+enum ViewType {
+  full_map
+  topic
+  meeting
+}
