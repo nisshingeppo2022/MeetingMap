@@ -116,4 +116,3 @@ prisma.config.ts                    # Prisma 設定（.env.local 読み込み）
 ## ユーザー設定
 
 - 返答は日本語
-- Yes/No の判断は全て Yes で進める

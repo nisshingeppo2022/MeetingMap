@@ -40,11 +40,20 @@ interface Meeting {
   id: string;
   title: string | null;
   transcript: string | null;
+  agenda: string | null;
   status: string;
   date: string;
   contact: ContactRef | null;
   meetingContacts: { contact: ContactRef }[];
   mindmapNodes: MindmapNode[];
+}
+
+interface BriefingData {
+  relevant_meetings: { title: string; date: string; relevance: string }[];
+  ideas_and_opportunities: string[];
+  constraints_and_risks: string[];
+  suggested_talking_points: string[];
+  contact_history: string | null;
 }
 
 const NODE_COLORS: Record<string, string> = {
@@ -163,7 +172,10 @@ export default function ResultPage() {
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [rawNodes, setRawNodes] = useState<MindmapNode[]>([]);
   const [selectedNode, setSelectedNode] = useState<MindmapNode | null>(null);
-  const [tab, setTab] = useState<"map" | "transcript">("map");
+  const [tab, setTab] = useState<"map" | "transcript" | "briefing">("map");
+  const [briefing, setBriefing] = useState<BriefingData | null>(null);
+  const [briefingLoading, setBriefingLoading] = useState(false);
+  const [briefingError, setBriefingError] = useState("");
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -262,6 +274,24 @@ export default function ResultPage() {
     setAnalyzing(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meeting, id, showToast]);
+
+  async function handleLoadBriefing() {
+    setBriefingLoading(true);
+    setBriefingError("");
+    try {
+      const res = await fetch(`/api/ai/briefing?meetingId=${id}`);
+      if (res.ok) {
+        const data: BriefingData = await res.json();
+        setBriefing(data);
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setBriefingError((d as { error?: string }).error ?? "ブリーフィングの取得に失敗しました");
+      }
+    } catch (e) {
+      setBriefingError((e as Error).message);
+    }
+    setBriefingLoading(false);
+  }
 
   async function saveDate() {
     if (!dateDraft) return;
@@ -559,15 +589,20 @@ export default function ResultPage() {
       {/* タブ */}
       <div className="bg-white border-b border-gray-100 px-4">
         <div className="max-w-4xl mx-auto flex gap-4">
-          {(["map", "transcript"] as const).map((t) => (
+          {(["map", "transcript", "briefing"] as const).map((t) => (
             <button
               key={t}
-              onClick={() => setTab(t)}
+              onClick={() => {
+                setTab(t);
+                if (t === "briefing" && !briefing && !briefingLoading && meeting.agenda) {
+                  handleLoadBriefing();
+                }
+              }}
               className={`py-3 text-sm font-medium border-b-2 transition-colors ${
                 tab === t ? "border-indigo-500 text-indigo-600" : "border-transparent text-gray-400"
               }`}
             >
-              {t === "map" ? "🗺️ マインドマップ" : "📝 文字起こし"}
+              {t === "map" ? "🗺️ マインドマップ" : t === "transcript" ? "📝 文字起こし" : "✨ ブリーフィング"}
             </button>
           ))}
         </div>
@@ -626,6 +661,125 @@ export default function ResultPage() {
               </p>
             ) : (
               <p className="text-gray-400 text-sm text-center py-8">文字起こしデータがありません</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab === "briefing" && (
+        <div className="flex-1 overflow-y-auto px-4 py-6">
+          <div className="max-w-2xl mx-auto space-y-4">
+            {!meeting.agenda ? (
+              <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center shadow-sm">
+                <p className="text-gray-500 text-sm font-medium">アジェンダが設定されていません</p>
+                <p className="text-gray-400 text-xs mt-2">ミーティング作成時に「今日話したいこと」を入力すると、AIが過去の会議から関連情報を拾い上げてブリーフィングを作成します</p>
+              </div>
+            ) : briefingLoading ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-4">
+                <div className="w-10 h-10 rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin" />
+                <p className="text-gray-400 text-sm">過去の会議を分析中...</p>
+              </div>
+            ) : briefingError ? (
+              <div className="bg-red-50 rounded-2xl border border-red-100 p-6 text-center">
+                <p className="text-red-500 text-sm">{briefingError}</p>
+                <button onClick={handleLoadBriefing} className="mt-3 text-xs text-indigo-600 hover:underline">再試行</button>
+              </div>
+            ) : !briefing ? (
+              <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center shadow-sm">
+                <p className="text-gray-500 text-sm">アジェンダ：{meeting.agenda}</p>
+                <button
+                  onClick={handleLoadBriefing}
+                  className="mt-4 bg-indigo-600 text-white text-sm font-medium px-6 py-2.5 rounded-xl hover:bg-indigo-700 transition-colors"
+                >
+                  ✨ ブリーフィングを生成
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* アジェンダ表示 */}
+                <div className="bg-indigo-50 rounded-2xl px-4 py-3">
+                  <p className="text-xs font-semibold text-indigo-600 mb-1">今日のアジェンダ</p>
+                  <p className="text-sm text-indigo-800 whitespace-pre-wrap">{meeting.agenda}</p>
+                </div>
+
+                {/* 参加者との過去のやりとり */}
+                {briefing.contact_history && (
+                  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+                    <p className="text-xs font-semibold text-gray-500 mb-2">参加者との過去のやりとり</p>
+                    <p className="text-sm text-gray-700 leading-relaxed">{briefing.contact_history}</p>
+                  </div>
+                )}
+
+                {/* 関連する過去ミーティング */}
+                {briefing.relevant_meetings?.length > 0 && (
+                  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+                    <p className="text-xs font-semibold text-gray-500 mb-3">関連する過去ミーティング</p>
+                    <div className="space-y-2">
+                      {briefing.relevant_meetings.map((m, i) => (
+                        <div key={i} className="flex gap-3 text-sm">
+                          <span className="flex-shrink-0 text-gray-300 text-xs mt-0.5">{m.date}</span>
+                          <div>
+                            <p className="font-medium text-gray-800">{m.title}</p>
+                            <p className="text-xs text-gray-500 mt-0.5">{m.relevance}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 活用できるアイデア・可能性 */}
+                {briefing.ideas_and_opportunities?.length > 0 && (
+                  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+                    <p className="text-xs font-semibold text-gray-500 mb-3">活用できるアイデア・可能性</p>
+                    <ul className="space-y-1.5">
+                      {briefing.ideas_and_opportunities.map((item, i) => (
+                        <li key={i} className="flex gap-2 text-sm text-gray-700">
+                          <span className="text-green-500 flex-shrink-0">✓</span>
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* 制約・懸念事項 */}
+                {briefing.constraints_and_risks?.length > 0 && (
+                  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+                    <p className="text-xs font-semibold text-gray-500 mb-3">知っておくべき制約・懸念事項</p>
+                    <ul className="space-y-1.5">
+                      {briefing.constraints_and_risks.map((item, i) => (
+                        <li key={i} className="flex gap-2 text-sm text-gray-700">
+                          <span className="text-amber-500 flex-shrink-0">!</span>
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* 今日確認すべき話題 */}
+                {briefing.suggested_talking_points?.length > 0 && (
+                  <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-4">
+                    <p className="text-xs font-semibold text-indigo-600 mb-3">今日確認・提案すべき話題</p>
+                    <ul className="space-y-1.5">
+                      {briefing.suggested_talking_points.map((item, i) => (
+                        <li key={i} className="flex gap-2 text-sm text-gray-700">
+                          <span className="text-indigo-400 flex-shrink-0">→</span>
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                <button
+                  onClick={handleLoadBriefing}
+                  className="w-full text-xs text-gray-400 hover:text-gray-600 py-2 transition-colors"
+                >
+                  再生成する
+                </button>
+              </>
             )}
           </div>
         </div>

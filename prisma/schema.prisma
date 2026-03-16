@@ -36,6 +36,7 @@ model Meeting {
   audioUrl            String?       @map("audio_url")
   durationSeconds     Int?          @map("duration_seconds")
   transcript          String?
+  agenda              String?
   transcriptSegments  Json?         @map("transcript_segments")
   aiAnalysis          Json?         @map("ai_analysis")
   status              MeetingStatus @default(recording)
@@ -178,6 +179,18 @@ model TopicItemMeeting {
   meeting     Meeting   @relation(fields: [meetingId], references: [id], onDelete: Cascade)
 
   @@map("topic_item_meetings")
+}
+
+model QuickMemo {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  content   String
+  tags      String[] @default([])
+  isPinned  Boolean  @default(false) @map("is_pinned")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("quick_memos")
 }
 
 model ShareLink {

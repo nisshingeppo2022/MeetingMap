@@ -26,6 +26,7 @@ export default function NewMeetingPage() {
   const [query, setQuery] = useState("");
   const [selectedContacts, setSelectedContacts] = useState<Contact[]>([]);
   const [showContactList, setShowContactList] = useState(false);
+  const [agenda, setAgenda] = useState("");
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
@@ -47,7 +48,7 @@ export default function NewMeetingPage() {
     const res = await fetch("/api/meetings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contactIds: selectedContacts.map((c) => c.id), mode }),
+      body: JSON.stringify({ contactIds: selectedContacts.map((c) => c.id), mode, agenda }),
     });
     if (res.ok) {
       const meeting = await res.json();
@@ -138,6 +139,20 @@ export default function NewMeetingPage() {
               {selectedContacts.length > 0 ? "参加者を追加・変更する" : "連絡先から選ぶ"}
             </span>
           </button>
+        </section>
+
+        {/* アジェンダ */}
+        <section>
+          <h2 className="text-sm font-semibold text-gray-500 mb-3">
+            今日話したいこと（任意）
+          </h2>
+          <textarea
+            value={agenda}
+            onChange={(e) => setAgenda(e.target.value)}
+            placeholder="確認したいこと、提案したいことをメモ...&#10;入力するとAIがブリーフィングを作成します"
+            className="w-full px-4 py-3 bg-white border border-gray-200 rounded-xl text-sm text-gray-800 placeholder-gray-300 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            rows={3}
+          />
         </section>
 
         {/* 開始ボタン */}

@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await request.json();
-  const { contactIds, mode } = body;
+  const { contactIds, mode, agenda } = body;
   const contactIdList: string[] = Array.isArray(contactIds) ? contactIds : (body.contactId ? [body.contactId] : []);
 
   if (!mode) return NextResponse.json({ error: "modeは必須です" }, { status: 400 });
@@ -52,6 +52,7 @@ export async function POST(request: NextRequest) {
       userId: user.id,
       contactId: contactIdList[0] ?? null,
       mode,
+      agenda: agenda?.trim() || null,
       status: "recording",
       ...(contactIdList.length > 0 && {
         meetingContacts: {

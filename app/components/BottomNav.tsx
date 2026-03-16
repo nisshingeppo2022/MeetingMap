@@ -6,9 +6,9 @@ import { usePathname } from "next/navigation";
 const NAV_ITEMS = [
   { href: "/", icon: "🏠", label: "ホーム" },
   { href: "/map", icon: "🗺️", label: "マップ" },
+  { href: "/memos", icon: "📝", label: "メモ" },
   { href: "/actions", icon: "✅", label: "タスク" },
   { href: "/topics", icon: "🏷️", label: "トピック" },
-  { href: "/contacts", icon: "📇", label: "連絡先" },
 ];
 
 export default function BottomNav() {

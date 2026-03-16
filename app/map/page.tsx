@@ -57,6 +57,7 @@ interface Meeting {
   title: string | null;
   date: string;
   mindmapNodes: MindmapNodeRaw[];
+  meetingContacts: { contact: { id: string; name: string; organization: string | null } }[];
 }
 
 // ---- 定数 ----
@@ -230,7 +231,7 @@ function MapInner() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState("");
   const [analyzeResult, setAnalyzeResult] = useState("");
-  const [view, setView] = useState<"map" | "list">("map");
+  const [view, setView] = useState<"map" | "list" | "person" | "theme" | "conflict" | "synthesis">("map");
   const [selectedCrossLink, setSelectedCrossLink] = useState<CrossLinkData | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
@@ -481,9 +482,9 @@ function MapInner() {
       const d = await res.json().catch(() => ({}) as { count?: number });
       const count = (d as { count?: number }).count ?? 0;
       if (count > 0) {
-        setAnalyzeResult(`${count}件の関連を検出しました`);
+        setAnalyzeResult(`${count}件の関連を検出しました（合成・共通課題・コンフリクトを含む）`);
       } else {
-        setAnalyzeResult("共通キーワードが見つかりませんでした。ノードのラベルに共通する単語が含まれているか確認してください。");
+        setAnalyzeResult("ミーティング間の関連は見つかりませんでした。");
       }
       await fetchData();
     } else {
@@ -521,29 +522,14 @@ function MapInner() {
           <Link href="/" className="text-gray-400 hover:text-gray-600 text-xl">←</Link>
           <h1 className="text-base font-bold text-gray-800 flex-1">全体マップ</h1>
           <div className="flex items-center gap-2">
-            {crossLinks.length > 0 && (
-              <div className="flex items-center gap-1 text-xs text-gray-400">
-                <span className="text-indigo-600 font-medium">{acceptedCount}</span>承認
-                {pendingCount > 0 && (
-                  <span className="ml-1 bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded-full font-medium">
-                    {pendingCount}件提案中
-                  </span>
-                )}
-              </div>
+            {crossLinks.length > 0 && pendingCount > 0 && (
+              <span className="text-xs bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded-full font-medium">
+                {pendingCount}件提案中
+              </span>
             )}
-            <div className="flex border border-gray-200 rounded-lg overflow-hidden">
-              <button onClick={() => setView("map")}
-                className={`px-3 py-1.5 text-xs font-medium transition-colors ${view === "map" ? "bg-indigo-600 text-white" : "text-gray-500 hover:bg-gray-50"}`}>
-                マップ
-              </button>
-              <button onClick={() => setView("list")}
-                className={`px-3 py-1.5 text-xs font-medium transition-colors ${view === "list" ? "bg-indigo-600 text-white" : "text-gray-500 hover:bg-gray-50"}`}>
-                リスト
-              </button>
-            </div>
             <button onClick={handleAnalyze} disabled={analyzing}
-              className="text-xs px-3 py-1.5 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-700 transition-colors disabled:opacity-50 font-medium">
-              {analyzing ? "分析中..." : "クロスリンクを分析"}
+              className="text-xs px-3 py-1.5 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-700 transition-colors disabled:opacity-50 font-medium whitespace-nowrap">
+              {analyzing ? "分析中..." : "AI分析"}
             </button>
           </div>
         </div>
@@ -551,8 +537,29 @@ function MapInner() {
         {analyzeResult && <p className="text-xs text-indigo-600 text-center mt-1">{analyzeResult}</p>}
       </header>
 
+      {/* タブバー */}
+      <div className="bg-white border-b border-gray-100 flex-shrink-0 overflow-x-auto">
+        <div className="flex min-w-max px-4">
+          {([
+            { key: "map",       label: "🗺️ マップ" },
+            { key: "list",      label: "🔗 リスト" },
+            { key: "person",    label: "👤 人物別" },
+            { key: "theme",     label: "🏷️ テーマ別" },
+            { key: "conflict",  label: "⚡ 対立" },
+            { key: "synthesis", label: `✨ 合成${acceptedCount > 0 ? `(${acceptedCount})` : ""}` },
+          ] as const).map((t) => (
+            <button key={t.key} onClick={() => setView(t.key)}
+              className={`py-2.5 px-3 text-xs font-medium border-b-2 transition-colors whitespace-nowrap ${
+                view === t.key ? "border-indigo-500 text-indigo-600" : "border-transparent text-gray-400 hover:text-gray-600"
+              }`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* コンテンツ */}
-      {view === "map" ? (
+      {view === "map" && (
         <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
           {/* ローディング・エラー・空状態（ReactFlowはアンマウントせずCSSで隠す） */}
           {(loading || fetchError || meetings.length === 0) && (
@@ -647,8 +654,10 @@ function MapInner() {
             </div>
           )}
         </div>
-      ) : (
-        /* リストビュー */
+      )}
+
+      {/* リストビュー */}
+      {view === "list" && (
         <div style={{ flex: 1, overflowY: "auto", paddingBottom: 80 }}>
           <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
             {loading ? (
@@ -706,6 +715,216 @@ function MapInner() {
                 </div>
               ))
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 人物別ビュー */}
+      {view === "person" && (
+        <div style={{ flex: 1, overflowY: "auto", paddingBottom: 80 }}>
+          <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+            {loading ? (
+              <p className="text-center text-gray-400 text-sm py-12">読み込み中...</p>
+            ) : (() => {
+              // 人物ごとにミーティングを集計
+              const personMap = new Map<string, { name: string; org: string | null; meetings: Meeting[] }>();
+              for (const m of meetings) {
+                for (const mc of m.meetingContacts ?? []) {
+                  const c = mc.contact;
+                  if (!personMap.has(c.id)) personMap.set(c.id, { name: c.name, org: c.organization, meetings: [] });
+                  personMap.get(c.id)!.meetings.push(m);
+                }
+              }
+              const persons = Array.from(personMap.values()).sort((a, b) => b.meetings.length - a.meetings.length);
+              if (persons.length === 0) return (
+                <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center shadow-sm">
+                  <p className="text-gray-400 text-sm">参加者が設定されたミーティングがありません</p>
+                </div>
+              );
+              return persons.map((p) => {
+                const allTopics = p.meetings.flatMap((m) =>
+                  m.mindmapNodes.filter((n) => n.nodeType === "topic").map((n) => n.label)
+                );
+                const uniqueTopics = Array.from(new Set(allTopics)).slice(0, 6);
+                const lastDate = p.meetings[0]?.date;
+                return (
+                  <div key={p.name} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold text-sm flex-shrink-0">
+                        {p.name[0]}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="font-semibold text-gray-800 text-sm">{p.name}</p>
+                          {p.org && <p className="text-xs text-gray-400 truncate">{p.org}</p>}
+                        </div>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          {p.meetings.length}回の会議 · 最終 {lastDate ? new Date(lastDate).toLocaleDateString("ja-JP") : "不明"}
+                        </p>
+                        {uniqueTopics.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {uniqueTopics.map((t) => (
+                              <span key={t} className="text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full">{t}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* テーマ別ビュー */}
+      {view === "theme" && (
+        <div style={{ flex: 1, overflowY: "auto", paddingBottom: 80 }}>
+          <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+            {loading ? (
+              <p className="text-center text-gray-400 text-sm py-12">読み込み中...</p>
+            ) : crossLinks.length === 0 ? (
+              <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center shadow-sm">
+                <p className="text-gray-400 text-sm">「AI分析」を実行するとテーマ別に関連が表示されます</p>
+              </div>
+            ) : (() => {
+              const themeMap = new Map<string, CrossLinkData[]>();
+              for (const cl of crossLinks) {
+                const cat = cl.category ?? "その他";
+                if (!themeMap.has(cat)) themeMap.set(cat, []);
+                themeMap.get(cat)!.push(cl);
+              }
+              return Array.from(themeMap.entries()).map(([cat, links]) => (
+                <div key={cat} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: links[0]?.categoryColor ?? "#6366f1" }} />
+                    <p className="text-sm font-semibold text-gray-700">{cat}</p>
+                    <span className="ml-auto text-xs text-gray-400">{links.length}件</span>
+                  </div>
+                  <div className="space-y-2">
+                    {links.map((cl) => (
+                      <div key={cl.id} className="bg-gray-50 rounded-xl px-3 py-2 text-xs text-gray-600">
+                        <span className="font-medium text-gray-800">{cl.fromNode.label}</span>
+                        <span className="mx-1.5 text-gray-300">↔</span>
+                        <span className="font-medium text-gray-800">{cl.toNode.label}</span>
+                        {cl.reason && <p className="mt-1 text-gray-500">{cl.reason}</p>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ));
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* コンフリクトビュー */}
+      {view === "conflict" && (
+        <div style={{ flex: 1, overflowY: "auto", paddingBottom: 80 }}>
+          <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+            {loading ? (
+              <p className="text-center text-gray-400 text-sm py-12">読み込み中...</p>
+            ) : (() => {
+              const conflicts = crossLinks.filter((cl) => cl.category?.startsWith("[コンフリクト]"));
+              if (conflicts.length === 0) return (
+                <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center shadow-sm">
+                  <p className="text-gray-400 text-sm">コンフリクトは検出されていません</p>
+                  <p className="text-gray-400 text-xs mt-1">「AI分析」を実行すると矛盾・衝突する決定を検出します</p>
+                </div>
+              );
+              return conflicts.map((cl) => (
+                <div key={cl.id} className="bg-white rounded-2xl border border-red-100 shadow-sm p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-red-500 text-sm">⚡</span>
+                    <p className="text-xs font-semibold text-red-600">{cl.category?.replace("[コンフリクト] ", "") ?? "コンフリクト"}</p>
+                    <span className={`ml-auto text-xs px-1.5 py-0.5 rounded-full ${cl.strength === "strong" ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-600"}`}>
+                      {cl.strength === "strong" ? "重大" : "要確認"}
+                    </span>
+                  </div>
+                  <div className="bg-red-50 rounded-xl px-3 py-2 mb-2 flex items-center gap-2 text-xs">
+                    <span className="font-medium text-gray-800 flex-1">{cl.fromNode.label}</span>
+                    <span className="text-red-400 flex-shrink-0">vs</span>
+                    <span className="font-medium text-gray-800 flex-1 text-right">{cl.toNode.label}</span>
+                  </div>
+                  {cl.reason && <p className="text-xs text-gray-600 leading-relaxed">{cl.reason}</p>}
+                  {cl.newValueSuggestion && (
+                    <p className="text-xs text-red-600 mt-1.5 leading-relaxed">{cl.newValueSuggestion}</p>
+                  )}
+                </div>
+              ));
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* 合成チャンスビュー */}
+      {view === "synthesis" && (
+        <div style={{ flex: 1, overflowY: "auto", paddingBottom: 80 }}>
+          <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+            {loading ? (
+              <p className="text-center text-gray-400 text-sm py-12">読み込み中...</p>
+            ) : (() => {
+              const syntheses = crossLinks.filter((cl) => cl.category?.startsWith("[合成]"));
+              const commonIssues = crossLinks.filter((cl) => cl.category?.startsWith("[共通課題]"));
+              if (syntheses.length === 0 && commonIssues.length === 0) return (
+                <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center shadow-sm">
+                  <p className="text-gray-400 text-sm">合成チャンス・共通課題は検出されていません</p>
+                  <p className="text-gray-400 text-xs mt-1">「AI分析」を実行すると組み合わせると面白い企画や共通課題を検出します</p>
+                </div>
+              );
+              return (
+                <>
+                  {syntheses.length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-semibold text-gray-400 mb-2 px-1">合成チャンス（{syntheses.length}件）</h3>
+                      <div className="space-y-3">
+                        {syntheses.map((cl) => (
+                          <div key={cl.id} className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-4">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-indigo-500">✨</span>
+                              <p className="text-xs font-semibold text-indigo-600">{cl.category?.replace("[合成] ", "") ?? "合成"}</p>
+                              <span className={`ml-auto text-xs px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-600`}>
+                                {cl.strength === "strong" ? "強い可能性" : "検討余地あり"}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 bg-indigo-50 rounded-xl px-3 py-2 mb-2 text-xs">
+                              <span className="font-medium text-gray-800 flex-1">{cl.fromNode.label}</span>
+                              <span className="text-indigo-400 flex-shrink-0">+</span>
+                              <span className="font-medium text-gray-800 flex-1 text-right">{cl.toNode.label}</span>
+                            </div>
+                            {cl.newValueSuggestion && (
+                              <p className="text-xs text-indigo-800 leading-relaxed">{cl.newValueSuggestion}</p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {commonIssues.length > 0 && (
+                    <div>
+                      <h3 className="text-xs font-semibold text-gray-400 mb-2 px-1">共通課題（{commonIssues.length}件）</h3>
+                      <div className="space-y-3">
+                        {commonIssues.map((cl) => (
+                          <div key={cl.id} className="bg-white rounded-2xl border border-green-100 shadow-sm p-4">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-green-500">🔗</span>
+                              <p className="text-xs font-semibold text-green-600">{cl.category?.replace("[共通課題] ", "") ?? "共通課題"}</p>
+                            </div>
+                            <div className="flex items-center gap-2 bg-green-50 rounded-xl px-3 py-2 mb-2 text-xs">
+                              <span className="font-medium text-gray-800 flex-1">{cl.fromNode.label}</span>
+                              <span className="text-green-400 flex-shrink-0">≈</span>
+                              <span className="font-medium text-gray-800 flex-1 text-right">{cl.toNode.label}</span>
+                            </div>
+                            {cl.reason && <p className="text-xs text-gray-600 leading-relaxed">{cl.reason}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
         </div>
       )}

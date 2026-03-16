@@ -1,38 +1,50 @@
-import { createServerSupabaseClient } from "@/lib/supabase-server";
-import { prisma } from "@/lib/prisma";
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
 
-export default async function ActionsPage() {
-  const supabase = await createServerSupabaseClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
-
-  const actionNodes = await prisma.mindmapNode.findMany({
-    where: {
-      meeting: { userId: user.id },
-      nodeType: "action",
-    },
-    include: {
-      meeting: { include: { contact: true } },
-    },
-    orderBy: { createdAt: "desc" },
-  });
-
-  const statusGroups: Record<string, typeof actionNodes> = {
-    "未完了": actionNodes.filter((n) => !n.status || n.status !== "完了"),
-    "完了": actionNodes.filter((n) => n.status === "完了"),
+interface ActionNode {
+  id: string;
+  label: string;
+  status: string | null;
+  meetingId: string;
+  createdAt: string;
+  meeting: {
+    title: string | null;
+    date: string;
+    contact: { name: string } | null;
   };
+}
 
-  const statusColors: Record<string, string> = {
-    "企画中": "bg-blue-100 text-blue-700",
-    "調整中": "bg-yellow-100 text-yellow-700",
-    "進行中": "bg-green-100 text-green-700",
-    "アイデア段階": "bg-purple-100 text-purple-700",
-    "完了": "bg-gray-100 text-gray-500",
-    "保留": "bg-red-100 text-red-700",
-  };
+export default function ActionsPage() {
+  const [nodes, setNodes] = useState<ActionNode[]>([]);
+  const [toggling, setToggling] = useState<string | null>(null);
 
-  const totalPending = statusGroups["未完了"].length;
+  useEffect(() => {
+    fetch("/api/actions")
+      .then((r) => r.json())
+      .then(setNodes);
+  }, []);
+
+  async function handleToggle(node: ActionNode, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (toggling === node.id) return;
+    setToggling(node.id);
+    const newStatus = node.status === "完了" ? null : "完了";
+    await fetch(`/api/mindmap/nodes/${node.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: newStatus }),
+    });
+    setNodes((prev) =>
+      prev.map((n) => (n.id === node.id ? { ...n, status: newStatus } : n))
+    );
+    setToggling(null);
+  }
+
+  const pending = nodes.filter((n) => n.status !== "完了");
+  const done = nodes.filter((n) => n.status === "完了");
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
@@ -40,61 +52,86 @@ export default async function ActionsPage() {
         <div className="max-w-2xl mx-auto flex items-center gap-3">
           <Link href="/" className="text-gray-400 hover:text-gray-600 text-xl">←</Link>
           <h1 className="text-base font-bold text-gray-800 flex-1">アクションアイテム</h1>
-          {totalPending > 0 && (
+          {pending.length > 0 && (
             <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
-              {totalPending}件未完了
+              {pending.length}件未完了
             </span>
           )}
         </div>
       </header>
 
       <main className="max-w-2xl mx-auto px-4 py-6 space-y-6">
-        {actionNodes.length === 0 ? (
+        {nodes.length === 0 ? (
           <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center shadow-sm">
             <p className="text-gray-400 text-sm">アクションアイテムがまだありません</p>
             <p className="text-gray-400 text-xs mt-1">ミーティングのAI分析を実行すると自動で追加されます</p>
           </div>
         ) : (
-          Object.entries(statusGroups).map(([groupName, nodes]) => {
-            if (nodes.length === 0) return null;
-            return (
-              <div key={groupName}>
-                <h2 className="text-sm font-semibold text-gray-500 mb-2">
-                  {groupName}（{nodes.length}件）
-                </h2>
+          <>
+            {pending.length > 0 && (
+              <div>
+                <h2 className="text-sm font-semibold text-gray-500 mb-2">未完了（{pending.length}件）</h2>
                 <div className="space-y-2">
-                  {nodes.map((node) => (
-                    <Link
-                      key={node.id}
-                      href={`/meetings/${node.meetingId}/result`}
-                      className="block bg-white rounded-xl border border-gray-100 px-4 py-3 shadow-sm hover:border-indigo-200 transition-colors"
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className={`mt-0.5 w-4 h-4 rounded-full border-2 flex-shrink-0 ${
-                          node.status === "完了" ? "bg-gray-300 border-gray-300" : "border-amber-400"
-                        }`} />
-                        <div className="flex-1 min-w-0">
-                          <p className={`text-sm font-medium ${node.status === "完了" ? "text-gray-400 line-through" : "text-gray-800"}`}>
-                            {node.label}
-                          </p>
+                  {pending.map((node) => (
+                    <div key={node.id} className="bg-white rounded-xl border border-gray-100 shadow-sm">
+                      <div className="flex items-start gap-3 px-4 py-3">
+                        <button
+                          onClick={(e) => handleToggle(node, e)}
+                          disabled={toggling === node.id}
+                          className="mt-0.5 w-5 h-5 rounded border-2 border-amber-400 flex-shrink-0 hover:bg-amber-50 transition-colors disabled:opacity-50 flex items-center justify-center"
+                        />
+                        <Link
+                          href={`/meetings/${node.meetingId}/result`}
+                          className="flex-1 min-w-0"
+                        >
+                          <p className="text-sm font-medium text-gray-800">{node.label}</p>
                           <p className="text-xs text-gray-400 mt-0.5">
                             {node.meeting.title ?? "タイトルなし"} ·{" "}
                             {node.meeting.contact?.name ?? "相手未設定"} ·{" "}
                             {new Date(node.meeting.date).toLocaleDateString("ja-JP")}
                           </p>
-                        </div>
-                        {node.status && node.status !== "完了" && (
-                          <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded-full ${statusColors[node.status] ?? "bg-gray-100 text-gray-500"}`}>
-                            {node.status}
-                          </span>
-                        )}
+                        </Link>
                       </div>
-                    </Link>
+                    </div>
                   ))}
                 </div>
               </div>
-            );
-          })
+            )}
+
+            {done.length > 0 && (
+              <div>
+                <h2 className="text-sm font-semibold text-gray-400 mb-2">完了（{done.length}件）</h2>
+                <div className="space-y-2">
+                  {done.map((node) => (
+                    <div key={node.id} className="bg-white rounded-xl border border-gray-100 shadow-sm opacity-60">
+                      <div className="flex items-start gap-3 px-4 py-3">
+                        <button
+                          onClick={(e) => handleToggle(node, e)}
+                          disabled={toggling === node.id}
+                          className="mt-0.5 w-5 h-5 rounded border-2 border-green-400 bg-green-400 flex-shrink-0 hover:bg-green-500 transition-colors disabled:opacity-50 flex items-center justify-center"
+                        >
+                          <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
+                        </button>
+                        <Link
+                          href={`/meetings/${node.meetingId}/result`}
+                          className="flex-1 min-w-0"
+                        >
+                          <p className="text-sm font-medium text-gray-400 line-through">{node.label}</p>
+                          <p className="text-xs text-gray-400 mt-0.5">
+                            {node.meeting.title ?? "タイトルなし"} ·{" "}
+                            {node.meeting.contact?.name ?? "相手未設定"} ·{" "}
+                            {new Date(node.meeting.date).toLocaleDateString("ja-JP")}
+                          </p>
+                        </Link>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </main>
     </div>
