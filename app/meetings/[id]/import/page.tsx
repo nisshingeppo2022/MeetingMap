@@ -81,37 +81,37 @@ export default function ImportPage() {
       xhr.send(file);
     });
 
-    // Step 2: サーバーがStorageからダウンロードしてGeminiにアップロード
-    setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：Geminiにアップロード中...`);
+    // Step 2: Supabase Edge Function で文字起こし（最大400秒、タイムアウトなし）
+    setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：AIが文字起こし中...（長い音声は数分かかります）`);
     setUploadProgress(100);
 
-    const completeRes = await fetch("/api/ai/transcribe/complete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        storagePath,
-        mimeType: file.type,
-        meetingId: id,
-        append: !isFirst,
-      }),
-    });
-    if (!completeRes.ok) {
-      const data = await completeRes.json().catch(() => ({}));
-      throw new Error(data.error ?? `アップロード失敗 (${completeRes.status})`);
+    const edgeRes = await fetch(
+      `${supabaseUrl}/functions/v1/transcribe-audio`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ storagePath, mimeType: file.type }),
+      }
+    );
+    if (!edgeRes.ok) {
+      const data = await edgeRes.json().catch(() => ({}));
+      throw new Error(data.error ?? `文字起こし失敗 (${edgeRes.status})`);
     }
-    const { fileUri, normalizedMime } = await completeRes.json();
+    const { transcript } = await edgeRes.json();
 
-    // Step 3: 文字起こし（時間がかかる場合あり）
-    setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：AIが文字起こし中...`);
-
-    const transcribeRes = await fetch("/api/ai/transcribe/transcribe", {
+    // Step 3: 文字起こし結果をDB保存（小さいデータなので即時完了）
+    setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：保存中...`);
+    const saveRes = await fetch("/api/ai/transcribe/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileUri, normalizedMime, meetingId: id, append: !isFirst }),
+      body: JSON.stringify({ transcript, meetingId: id, append: !isFirst }),
     });
-    if (!transcribeRes.ok) {
-      const data = await transcribeRes.json().catch(() => ({}));
-      throw new Error(data.error ?? `文字起こし失敗 (${transcribeRes.status})`);
+    if (!saveRes.ok) {
+      const data = await saveRes.json().catch(() => ({}));
+      throw new Error(data.error ?? `保存失敗 (${saveRes.status})`);
     }
   }
 
