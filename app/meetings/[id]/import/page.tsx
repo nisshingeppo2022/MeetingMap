@@ -81,8 +81,8 @@ export default function ImportPage() {
       xhr.send(file);
     });
 
-    // Step 2: サーバーがStorageからダウンロードしてGeminiで文字起こし
-    setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：AIが文字起こし中...`);
+    // Step 2: サーバーがStorageからダウンロードしてGeminiにアップロード
+    setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：Geminiにアップロード中...`);
     setUploadProgress(100);
 
     const completeRes = await fetch("/api/ai/transcribe/complete", {
@@ -97,7 +97,21 @@ export default function ImportPage() {
     });
     if (!completeRes.ok) {
       const data = await completeRes.json().catch(() => ({}));
-      throw new Error(data.error ?? `文字起こし失敗 (${completeRes.status})`);
+      throw new Error(data.error ?? `アップロード失敗 (${completeRes.status})`);
+    }
+    const { fileUri, normalizedMime } = await completeRes.json();
+
+    // Step 3: 文字起こし（時間がかかる場合あり）
+    setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：AIが文字起こし中...`);
+
+    const transcribeRes = await fetch("/api/ai/transcribe/transcribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileUri, normalizedMime, meetingId: id, append: !isFirst }),
+    });
+    if (!transcribeRes.ok) {
+      const data = await transcribeRes.json().catch(() => ({}));
+      throw new Error(data.error ?? `文字起こし失敗 (${transcribeRes.status})`);
     }
   }
 
