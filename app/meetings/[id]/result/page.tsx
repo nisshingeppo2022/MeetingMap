@@ -388,13 +388,27 @@ export default function ResultPage() {
         const { token } = await res.json();
         const url = `${window.location.origin}/share/${token}`;
         setShareUrl(url);
-        const ok = await copyToClipboard(url);
-        showToast(ok ? "共有URLをコピーしました" : "共有URLを作成しました（コピーできませんでした）", ok ? "success" : "error");
+        // モバイル: ネイティブ共有シートを使う
+        if (navigator.share) {
+          await navigator.share({ title: meeting?.title ?? "ミーティング", url });
+        } else {
+          // デスクトップ: クリップボードにコピー
+          const ok = await copyToClipboard(url);
+          if (ok) {
+            showToast("共有URLをコピーしました", "success");
+          } else {
+            // コピーも失敗した場合はURLをプロンプトで表示
+            window.prompt("URLをコピーしてください:", url);
+          }
+        }
       } else {
         showToast("共有リンクの作成に失敗しました", "error");
       }
-    } catch {
-      showToast("共有リンクの作成に失敗しました", "error");
+    } catch (e) {
+      // navigator.share のキャンセルは無視
+      if ((e as Error).name !== "AbortError") {
+        showToast("共有リンクの作成に失敗しました", "error");
+      }
     }
     setSharing(false);
   }
