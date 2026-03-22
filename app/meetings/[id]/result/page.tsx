@@ -251,6 +251,7 @@ export default function ResultPage() {
           transcript: meeting.transcript,
           contact_name: meeting.contact?.name,
           contact_org: meeting.contact?.organization,
+          agenda: meeting.agenda,
         }),
       });
       if (res.ok) {

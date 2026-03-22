@@ -9,16 +9,17 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { meeting_id, transcript, contact_name, contact_org } = await request.json();
+  const { meeting_id, transcript, contact_name, contact_org, agenda } = await request.json();
   if (!meeting_id || !transcript) {
     return NextResponse.json({ error: "meeting_id と transcript は必須です" }, { status: 400 });
   }
 
   // Gemini に送信
+  const agendaSection = agenda ? `\n- 事前メモ・話したかったこと:\n${agenda}` : "";
   const prompt = `${ANALYZE_PROMPT}
 
 ## ミーティング情報
-- 相手: ${contact_name ?? "不明"} (${contact_org ?? "不明"})
+- 相手: ${contact_name ?? "不明"} (${contact_org ?? "不明"})${agendaSection}
 - 文字起こし:
 ${transcript}`;
 

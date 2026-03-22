@@ -9,17 +9,31 @@ interface Meeting {
   contact: { name: string; organization: string | null } | null;
 }
 
-type Step = "select" | "uploading" | "transcribing" | "done" | "error";
+type Step = "select" | "processing" | "done" | "error";
 
 const ACCEPTED = ".m4a,.mp3,.mp4,.wav,.aac,.ogg,.flac,.webm,.caf";
+
+function normalizeMime(rawMime: string, fileName: string): string {
+  if (fileName.endsWith(".m4a") || fileName.endsWith(".caf")) return "audio/mp4";
+  if (fileName.endsWith(".mp3")) return "audio/mpeg";
+  if (fileName.endsWith(".wav")) return "audio/wav";
+  if (fileName.endsWith(".ogg")) return "audio/ogg";
+  if (fileName.endsWith(".aac")) return "audio/aac";
+  if (fileName.endsWith(".flac")) return "audio/flac";
+  if (fileName.endsWith(".webm")) return "audio/webm";
+  if (rawMime === "audio/x-m4a" || rawMime === "audio/m4a") return "audio/mp4";
+  return rawMime || "audio/mp4";
+}
 
 export default function ImportPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [meeting, setMeeting] = useState<Meeting | null>(null);
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [step, setStep] = useState<Step>("select");
+  const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [statusMsg, setStatusMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -29,57 +43,102 @@ export default function ImportPage() {
       .then(setMeeting);
   }, [id]);
 
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(e.target.files ?? []);
+    // ファイルを名前順に並べる（分割ファイルは番号順になっているはず）
+    selected.sort((a, b) => a.name.localeCompare(b.name));
+    setFiles(selected);
+  }
+
+  function removeFile(index: number) {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  // 1ファイルをGeminiに直接アップロードして文字起こし
+  async function processFile(file: File, fileIndex: number, isFirst: boolean): Promise<void> {
+    const mimeType = normalizeMime(file.type, file.name);
+
+    // Step 1: サーバーからアップロードURLを取得（ファイルはVercelを通らない）
+    setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：アップロード準備中...`);
+    const initRes = await fetch("/api/ai/transcribe/init", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileName: file.name, fileSize: file.size, mimeType }),
+    });
+    if (!initRes.ok) {
+      const data = await initRes.json();
+      throw new Error(data.error ?? "アップロード初期化失敗");
+    }
+    const { uploadUrl } = await initRes.json();
+
+    // Step 2: ブラウザからGeminiに直接アップロード（Vercelのサイズ制限なし）
+    setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：Geminiにアップロード中...`);
+    setUploadProgress(0);
+    const fileUri = await new Promise<string>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", uploadUrl);
+      xhr.setRequestHeader("Content-Length", String(file.size));
+      xhr.setRequestHeader("X-Goog-Upload-Offset", "0");
+      xhr.setRequestHeader("X-Goog-Upload-Command", "upload, finalize");
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          setUploadProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            const uri = data.file?.uri;
+            if (uri) resolve(uri);
+            else reject(new Error("ファイルURIが取得できませんでした"));
+          } catch {
+            reject(new Error("レスポンスの解析に失敗しました"));
+          }
+        } else {
+          reject(new Error(`アップロード失敗 (${xhr.status})`));
+        }
+      };
+      xhr.onerror = () => reject(new Error("ネットワークエラーが発生しました"));
+      xhr.send(file);
+    });
+
+    // Step 3: サーバーで文字起こし（2ファイル目以降は追記モード）
+    setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：AIが文字起こし中...`);
+    const completeRes = await fetch("/api/ai/transcribe/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileUri, meetingId: id, mimeType, append: !isFirst }),
+    });
+    if (!completeRes.ok) {
+      const data = await completeRes.json();
+      throw new Error(data.error ?? "文字起こし失敗");
+    }
+  }
+
   async function handleUpload() {
-    if (!file) return;
+    if (files.length === 0) return;
+    setStep("processing");
+    setCurrentFileIndex(0);
+    setUploadProgress(0);
 
     try {
-      setStep("uploading");
-      setUploadProgress(0);
-
-      // XHRでアップロード進捗を表示しながらサーバーに送る
-      const fileUri = await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        const formData = new FormData();
-        formData.append("file", file);
-        formData.append("meeting_id", id);
-
-        xhr.open("POST", "/api/ai/transcribe");
-
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            const pct = Math.round((e.loaded / e.total) * 100);
-            setUploadProgress(pct);
-            if (pct >= 100) setStep("transcribing");
-          }
-        };
-
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve();
-          } else {
-            try {
-              const data = JSON.parse(xhr.responseText);
-              reject(new Error(data.error ?? `サーバーエラー (${xhr.status})`));
-            } catch {
-              reject(new Error(`サーバーエラー (${xhr.status})`));
-            }
-          }
-        };
-
-        xhr.onerror = () => reject(new Error("ネットワークエラーが発生しました"));
-        xhr.send(formData);
-      });
-
-      void fileUri;
+      for (let i = 0; i < files.length; i++) {
+        setCurrentFileIndex(i);
+        await processFile(files[i], i, i === 0);
+      }
       setStep("done");
       router.push(`/meetings/${id}/result?autoAnalyze=1`);
-
     } catch (e) {
       console.error(e);
       setErrorMsg((e as Error).message);
       setStep("error");
     }
   }
+
+  const totalSizeMB = files.reduce((sum, f) => sum + f.size, 0) / 1024 / 1024;
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -99,13 +158,12 @@ export default function ImportPage() {
         {step === "select" && (
           <>
             <div className="bg-indigo-50 rounded-2xl p-4 text-sm text-indigo-700 space-y-2">
-              <p className="font-semibold">iPhoneのボイスメモから取り込む方法</p>
-              <ol className="list-decimal list-inside space-y-1 text-indigo-600 text-xs">
-                <li>ボイスメモアプリで録音を長押し →「共有」</li>
-                <li>AirDrop でMacに送る、またはiCloud Drive経由でMacに保存</li>
-                <li>下のボタンからファイルを選択</li>
-              </ol>
-              <p className="text-xs text-indigo-500">※ 1時間以上の長い録音も対応しています</p>
+              <p className="font-semibold">音声ファイルの取り込みについて</p>
+              <ul className="list-disc list-inside space-y-1 text-indigo-600 text-xs">
+                <li>2時間以上の長い録音も対応（ファイルサイズ制限なし）</li>
+                <li>分割した音声は複数同時に選択できます。名前順に結合されます</li>
+                <li>M4A・MP3・WAV・MP4・AAC・OGG・WEBMなど対応</li>
+              </ul>
             </div>
 
             <button
@@ -115,7 +173,7 @@ export default function ImportPage() {
               <span className="text-5xl">📂</span>
               <div className="text-center">
                 <p className="font-medium text-gray-700 text-sm">音声ファイルを選択</p>
-                <p className="text-xs text-gray-400 mt-1">M4A・MP3・WAV・MP4など対応</p>
+                <p className="text-xs text-gray-400 mt-1">複数ファイルを同時に選択できます</p>
               </div>
             </button>
 
@@ -123,24 +181,35 @@ export default function ImportPage() {
               ref={inputRef}
               type="file"
               accept={ACCEPTED}
+              multiple
               className="hidden"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              onChange={handleFileChange}
             />
 
-            {file && (
-              <div className="bg-white rounded-xl border border-gray-100 px-4 py-3 shadow-sm flex items-center gap-3">
-                <span className="text-2xl">🎵</span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-800 truncate">{file.name}</p>
-                  <p className="text-xs text-gray-400">{(file.size / 1024 / 1024).toFixed(1)} MB</p>
-                </div>
-                <button onClick={() => setFile(null)} className="text-gray-300 hover:text-gray-500">✕</button>
+            {files.length > 0 && (
+              <div className="space-y-2">
+                {files.map((file, i) => (
+                  <div key={i} className="bg-white rounded-xl border border-gray-100 px-4 py-3 shadow-sm flex items-center gap-3">
+                    <span className="text-xl text-gray-400 font-bold min-w-[1.5rem] text-center">{i + 1}</span>
+                    <span className="text-lg">🎵</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-800 truncate">{file.name}</p>
+                      <p className="text-xs text-gray-400">{(file.size / 1024 / 1024).toFixed(1)} MB</p>
+                    </div>
+                    <button onClick={() => removeFile(i)} className="text-gray-300 hover:text-gray-500 text-sm">✕</button>
+                  </div>
+                ))}
+                {files.length > 1 && (
+                  <p className="text-xs text-gray-400 text-center">
+                    合計 {totalSizeMB.toFixed(1)} MB · {files.length}ファイルを順番に結合します
+                  </p>
+                )}
               </div>
             )}
 
             <button
               onClick={handleUpload}
-              disabled={!file}
+              disabled={files.length === 0}
               className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-semibold py-4 rounded-2xl transition-colors shadow-sm text-sm"
             >
               🤖 文字起こし＆AI分析する
@@ -148,28 +217,35 @@ export default function ImportPage() {
           </>
         )}
 
-        {step === "uploading" && (
+        {step === "processing" && (
           <div className="flex flex-col items-center justify-center py-16 gap-5">
+            {files.length > 1 && (
+              <div className="flex gap-1.5">
+                {files.map((_, i) => (
+                  <div
+                    key={i}
+                    className={`h-2 rounded-full transition-all ${
+                      i < currentFileIndex ? "w-4 bg-indigo-400" :
+                      i === currentFileIndex ? "w-8 bg-indigo-600" :
+                      "w-4 bg-gray-200"
+                    }`}
+                  />
+                ))}
+              </div>
+            )}
             <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
               <div
-                className="bg-indigo-500 h-3 rounded-full transition-all duration-500"
+                className="bg-indigo-500 h-3 rounded-full transition-all duration-300"
                 style={{ width: `${uploadProgress}%` }}
               />
             </div>
             <div className="text-center">
-              <p className="text-gray-700 font-semibold text-sm">サーバーにアップロード中... {uploadProgress}%</p>
-              {file && <p className="text-gray-400 text-xs mt-1">{file.name}（{(file.size / 1024 / 1024).toFixed(1)} MB）</p>}
-              <p className="text-amber-500 text-xs mt-3 font-medium">このページを閉じないでください</p>
-            </div>
-          </div>
-        )}
-
-        {step === "transcribing" && (
-          <div className="flex flex-col items-center justify-center py-16 gap-5">
-            <div className="w-16 h-16 rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin" />
-            <div className="text-center">
-              <p className="text-gray-700 font-semibold text-sm">AIが文字起こし中...</p>
-              <p className="text-gray-400 text-xs mt-1">1時間以上の音声は数分かかります</p>
+              <p className="text-gray-700 font-semibold text-sm">{statusMsg}</p>
+              {files[currentFileIndex] && (
+                <p className="text-gray-400 text-xs mt-1">
+                  {files[currentFileIndex].name}（{(files[currentFileIndex].size / 1024 / 1024).toFixed(1)} MB）
+                </p>
+              )}
               <p className="text-amber-500 text-xs mt-3 font-medium">このページを閉じないでください</p>
             </div>
           </div>
@@ -179,7 +255,7 @@ export default function ImportPage() {
           <div className="bg-red-50 rounded-2xl p-6 text-center space-y-3">
             <p className="text-red-600 font-medium text-sm">{errorMsg}</p>
             <button
-              onClick={() => { setStep("select"); setFile(null); setUploadProgress(0); }}
+              onClick={() => { setStep("select"); setFiles([]); setUploadProgress(0); }}
               className="text-sm text-indigo-600 underline"
             >
               もう一度試す
