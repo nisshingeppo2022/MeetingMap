@@ -352,6 +352,29 @@ export default function ResultPage() {
     setContactQuery("");
   }
 
+  async function copyToClipboard(text: string): Promise<boolean> {
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        // fall through to legacy
+      }
+    }
+    // モバイル・非対応ブラウザ向けフォールバック
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    try {
+      return document.execCommand("copy");
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  }
+
   async function handleShare() {
     setSharing(true);
     try {
@@ -364,8 +387,8 @@ export default function ResultPage() {
         const { token } = await res.json();
         const url = `${window.location.origin}/share/${token}`;
         setShareUrl(url);
-        await navigator.clipboard.writeText(url).catch(() => {});
-        showToast("共有URLをコピーしました", "success");
+        const ok = await copyToClipboard(url);
+        showToast(ok ? "共有URLをコピーしました" : "共有URLを作成しました（コピーできませんでした）", ok ? "success" : "error");
       } else {
         showToast("共有リンクの作成に失敗しました", "error");
       }
@@ -377,9 +400,9 @@ export default function ResultPage() {
 
   async function handleExport() {
     const text = exportAsText(rawNodes);
-    await navigator.clipboard.writeText(text).catch(() => {});
+    const ok = await copyToClipboard(text);
     setCopied(true);
-    showToast("テキストをコピーしました", "success");
+    showToast(ok ? "テキストをコピーしました" : "コピーに失敗しました", ok ? "success" : "error");
     setTimeout(() => setCopied(false), 2000);
   }
 
