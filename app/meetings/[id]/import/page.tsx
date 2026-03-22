@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { createClient } from "@/lib/supabase";
 
 interface Meeting {
   id: string;
@@ -42,27 +43,26 @@ export default function ImportPage() {
   }
 
   async function processFile(file: File, fileIndex: number, isFirst: boolean): Promise<void> {
-    // Step 1: サーバーからSupabase署名付きアップロードURLを取得
-    setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：アップロード準備中...`);
+    const supabase = createClient();
+
+    // ユーザー情報とJWT取得
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error("ログインが必要です");
+
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "audio";
+    const storagePath = `${session.user.id}/${Date.now()}_${fileIndex}.${ext}`;
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+
+    // Step 1: Supabase StorageにXHRで直接アップロード（進捗表示あり）
+    setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：Supabaseにアップロード中...`);
     setUploadProgress(0);
 
-    const initRes = await fetch("/api/ai/transcribe/init", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileName: file.name, fileIndex }),
-    });
-    if (!initRes.ok) {
-      const data = await initRes.json();
-      throw new Error(data.error ?? "アップロード初期化失敗");
-    }
-    const { signedUploadUrl, storagePath } = await initRes.json();
-
-    // Step 2: ブラウザからSupabase Storageに直接アップロード（CORSあり、サイズ制限なし）
-    setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：アップロード中...`);
     await new Promise<void>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open("PUT", signedUploadUrl);
+      xhr.open("POST", `${supabaseUrl}/storage/v1/object/audio-uploads/${storagePath}`);
+      xhr.setRequestHeader("Authorization", `Bearer ${session.access_token}`);
       xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+      xhr.setRequestHeader("x-upsert", "true");
 
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
@@ -74,14 +74,14 @@ export default function ImportPage() {
         if (xhr.status >= 200 && xhr.status < 300) {
           resolve();
         } else {
-          reject(new Error(`アップロード失敗 (${xhr.status}): ${xhr.responseText.slice(0, 100)}`));
+          reject(new Error(`アップロード失敗 (${xhr.status}): ${xhr.responseText.slice(0, 150)}`));
         }
       };
       xhr.onerror = () => reject(new Error("ネットワークエラーが発生しました"));
       xhr.send(file);
     });
 
-    // Step 3: サーバーがStorageからダウンロードしてGeminiで文字起こし
+    // Step 2: サーバーがStorageからダウンロードしてGeminiで文字起こし
     setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：AIが文字起こし中...`);
     setUploadProgress(100);
 
@@ -96,8 +96,8 @@ export default function ImportPage() {
       }),
     });
     if (!completeRes.ok) {
-      const data = await completeRes.json();
-      throw new Error(data.error ?? "文字起こし失敗");
+      const data = await completeRes.json().catch(() => ({}));
+      throw new Error(data.error ?? `文字起こし失敗 (${completeRes.status})`);
     }
   }
 
@@ -173,7 +173,7 @@ export default function ImportPage() {
               <div className="space-y-2">
                 {files.map((file, i) => (
                   <div key={i} className="bg-white rounded-xl border border-gray-100 px-4 py-3 shadow-sm flex items-center gap-3">
-                    <span className="text-xl text-gray-400 font-bold min-w-[1.5rem] text-center">{i + 1}</span>
+                    <span className="text-sm text-gray-400 font-bold min-w-[1.5rem] text-center">{i + 1}</span>
                     <span className="text-lg">🎵</span>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-800 truncate">{file.name}</p>
@@ -222,14 +222,17 @@ export default function ImportPage() {
                 style={{ width: `${uploadProgress}%` }}
               />
             </div>
-            <div className="text-center">
+            <div className="text-center space-y-1">
               <p className="text-gray-700 font-semibold text-sm">{statusMsg}</p>
               {files[currentFileIndex] && (
-                <p className="text-gray-400 text-xs mt-1">
+                <p className="text-gray-400 text-xs">
                   {files[currentFileIndex].name}（{(files[currentFileIndex].size / 1024 / 1024).toFixed(1)} MB）
                 </p>
               )}
-              <p className="text-amber-500 text-xs mt-3 font-medium">このページを閉じないでください</p>
+              {uploadProgress === 100 && (
+                <p className="text-indigo-500 text-xs">文字起こしは数分かかることがあります...</p>
+              )}
+              <p className="text-amber-500 text-xs font-medium pt-1">このページを閉じないでください</p>
             </div>
           </div>
         )}
