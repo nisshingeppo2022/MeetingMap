@@ -22,7 +22,9 @@ export async function POST(request: NextRequest) {
     { auth: { persistSession: false } }
   );
 
-  const storagePath = `${user.id}/${Date.now()}_${fileIndex ?? 0}_${fileName}`;
+  // ファイル名の拡張子だけ取り出し、パスは安全な文字のみ使用
+  const ext = fileName.split(".").pop()?.toLowerCase() ?? "audio";
+  const storagePath = `${user.id}/${Date.now()}_${fileIndex ?? 0}.${ext}`;
 
   const { data, error } = await admin.storage
     .from("audio-uploads")
