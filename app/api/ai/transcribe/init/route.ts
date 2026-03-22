@@ -1,46 +1,37 @@
 import { createServerSupabaseClient } from "@/lib/supabase-server";
+import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 30;
 
-// ブラウザから直接Geminiにアップロードするための初期化エンドポイント
-// ファイルはVercelを経由しないため、サイズ制限なし
+// ブラウザがSupabase Storageに直接アップロードするための署名付きURLを発行
 export async function POST(request: NextRequest) {
   const supabase = await createServerSupabaseClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { fileName, fileSize, mimeType } = await request.json();
-  if (!fileName || !fileSize || !mimeType) {
-    return NextResponse.json({ error: "fileName, fileSize, mimeType は必須です" }, { status: 400 });
+  const { fileName, fileIndex } = await request.json();
+  if (!fileName) {
+    return NextResponse.json({ error: "fileName は必須です" }, { status: 400 });
   }
 
-  const apiKey = process.env.GEMINI_API_KEY!;
-
-  const initRes = await fetch(
-    `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: {
-        "X-Goog-Upload-Protocol": "resumable",
-        "X-Goog-Upload-Command": "start",
-        "X-Goog-Upload-Header-Content-Length": String(fileSize),
-        "X-Goog-Upload-Header-Content-Type": mimeType,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ file: { display_name: fileName } }),
-    }
+  // service_role でストレージ操作
+  const admin = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { persistSession: false } }
   );
 
-  if (!initRes.ok) {
-    const err = await initRes.text();
-    return NextResponse.json({ error: `アップロード初期化失敗: ${err.slice(0, 200)}` }, { status: 500 });
+  const storagePath = `${user.id}/${Date.now()}_${fileIndex ?? 0}_${fileName}`;
+
+  const { data, error } = await admin.storage
+    .from("audio-uploads")
+    .createSignedUploadUrl(storagePath);
+
+  if (error || !data) {
+    console.error("Supabase signed URL error:", error);
+    return NextResponse.json({ error: `ストレージURLの取得に失敗しました: ${error?.message}` }, { status: 500 });
   }
 
-  const uploadUrl = initRes.headers.get("x-goog-upload-url");
-  if (!uploadUrl) {
-    return NextResponse.json({ error: "アップロードURLが取得できませんでした" }, { status: 500 });
-  }
-
-  return NextResponse.json({ uploadUrl });
+  return NextResponse.json({ signedUploadUrl: data.signedUrl, storagePath });
 }

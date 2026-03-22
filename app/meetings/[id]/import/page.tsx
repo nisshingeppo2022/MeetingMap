@@ -13,18 +13,6 @@ type Step = "select" | "processing" | "done" | "error";
 
 const ACCEPTED = ".m4a,.mp3,.mp4,.wav,.aac,.ogg,.flac,.webm,.caf";
 
-function normalizeMime(rawMime: string, fileName: string): string {
-  if (fileName.endsWith(".m4a") || fileName.endsWith(".caf")) return "audio/mp4";
-  if (fileName.endsWith(".mp3")) return "audio/mpeg";
-  if (fileName.endsWith(".wav")) return "audio/wav";
-  if (fileName.endsWith(".ogg")) return "audio/ogg";
-  if (fileName.endsWith(".aac")) return "audio/aac";
-  if (fileName.endsWith(".flac")) return "audio/flac";
-  if (fileName.endsWith(".webm")) return "audio/webm";
-  if (rawMime === "audio/x-m4a" || rawMime === "audio/m4a") return "audio/mp4";
-  return rawMime || "audio/mp4";
-}
-
 export default function ImportPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -45,7 +33,6 @@ export default function ImportPage() {
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(e.target.files ?? []);
-    // ファイルを名前順に並べる（分割ファイルは番号順になっているはず）
     selected.sort((a, b) => a.name.localeCompare(b.name));
     setFiles(selected);
   }
@@ -54,32 +41,28 @@ export default function ImportPage() {
     setFiles((prev) => prev.filter((_, i) => i !== index));
   }
 
-  // 1ファイルをGeminiに直接アップロードして文字起こし
   async function processFile(file: File, fileIndex: number, isFirst: boolean): Promise<void> {
-    const mimeType = normalizeMime(file.type, file.name);
-
-    // Step 1: サーバーからアップロードURLを取得（ファイルはVercelを通らない）
+    // Step 1: サーバーからSupabase署名付きアップロードURLを取得
     setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：アップロード準備中...`);
+    setUploadProgress(0);
+
     const initRes = await fetch("/api/ai/transcribe/init", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileName: file.name, fileSize: file.size, mimeType }),
+      body: JSON.stringify({ fileName: file.name, fileIndex }),
     });
     if (!initRes.ok) {
       const data = await initRes.json();
       throw new Error(data.error ?? "アップロード初期化失敗");
     }
-    const { uploadUrl } = await initRes.json();
+    const { signedUploadUrl, storagePath } = await initRes.json();
 
-    // Step 2: ブラウザからGeminiに直接アップロード（Vercelのサイズ制限なし）
-    setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：Geminiにアップロード中...`);
-    setUploadProgress(0);
-    const fileUri = await new Promise<string>((resolve, reject) => {
+    // Step 2: ブラウザからSupabase Storageに直接アップロード（CORSあり、サイズ制限なし）
+    setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：アップロード中...`);
+    await new Promise<void>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", uploadUrl);
-      xhr.setRequestHeader("Content-Length", String(file.size));
-      xhr.setRequestHeader("X-Goog-Upload-Offset", "0");
-      xhr.setRequestHeader("X-Goog-Upload-Command", "upload, finalize");
+      xhr.open("PUT", signedUploadUrl);
+      xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
 
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
@@ -89,28 +72,28 @@ export default function ImportPage() {
 
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            const data = JSON.parse(xhr.responseText);
-            const uri = data.file?.uri;
-            if (uri) resolve(uri);
-            else reject(new Error("ファイルURIが取得できませんでした"));
-          } catch {
-            reject(new Error("レスポンスの解析に失敗しました"));
-          }
+          resolve();
         } else {
-          reject(new Error(`アップロード失敗 (${xhr.status})`));
+          reject(new Error(`アップロード失敗 (${xhr.status}): ${xhr.responseText.slice(0, 100)}`));
         }
       };
       xhr.onerror = () => reject(new Error("ネットワークエラーが発生しました"));
       xhr.send(file);
     });
 
-    // Step 3: サーバーで文字起こし（2ファイル目以降は追記モード）
+    // Step 3: サーバーがStorageからダウンロードしてGeminiで文字起こし
     setStatusMsg(`ファイル ${fileIndex + 1}/${files.length}：AIが文字起こし中...`);
+    setUploadProgress(100);
+
     const completeRes = await fetch("/api/ai/transcribe/complete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileUri, meetingId: id, mimeType, append: !isFirst }),
+      body: JSON.stringify({
+        storagePath,
+        mimeType: file.type,
+        meetingId: id,
+        append: !isFirst,
+      }),
     });
     if (!completeRes.ok) {
       const data = await completeRes.json();
