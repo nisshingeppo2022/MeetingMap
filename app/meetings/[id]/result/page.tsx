@@ -399,7 +399,7 @@ export default function ResultPage() {
       } else {
         showToast("共有リンクの作成に失敗しました", "error");
       }
-    } catch (e) {
+    } catch {
       showToast("共有リンクの作成に失敗しました", "error");
     }
     setSharing(false);
