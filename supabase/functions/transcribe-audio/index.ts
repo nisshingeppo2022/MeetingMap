@@ -37,13 +37,12 @@ Deno.serve(async (req: Request) => {
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const geminiApiKey = Deno.env.get("GEMINI_API_KEY")!;
 
-    // ユーザー認証確認
-    const userClient = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
-    const { data: { user }, error: authError } = await userClient.auth.getUser();
+    // ユーザー認証確認（tokenを直接渡す）
+    const token = authHeader.replace("Bearer ", "");
+    const userClient = createClient(supabaseUrl, anonKey);
+    const { data: { user }, error: authError } = await userClient.auth.getUser(token);
     if (authError || !user) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      return new Response(JSON.stringify({ error: `Unauthorized: ${authError?.message}` }), {
         status: 401, headers: corsHeaders,
       });
     }
