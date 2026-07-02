@@ -4,6 +4,10 @@ import { generateContent, TAG_ONLY_PROMPT } from "@/lib/gemini";
 import { saveMeetingTags } from "@/lib/tags";
 import { NextRequest, NextResponse } from "next/server";
 
+// Vercel Hobbyプランの上限(60秒)。長い文字起こし+Geminiのレート制限リトライを
+// 見込んで最大値を確保する(デフォルトのままだと数秒〜十数秒でタイムアウトする)
+export const maxDuration = 60;
+
 // タグ未付与の会議一覧を返す
 export async function GET() {
   const supabase = await createServerSupabaseClient();
@@ -64,7 +68,8 @@ ${meeting.transcript}`;
 
   let tagNames: string[] = [];
   try {
-    const raw = await generateContent(prompt);
+    // タグ抽出は単純作業なのでthinkingを無効化(速度優先、リトライ余地を確保)
+    const raw = await generateContent(prompt, { thinkingBudget: 0, retries: 1 });
     const stripped = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "");
     const jsonMatch = stripped.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error(`JSONが見つかりません。レスポンス: ${raw.slice(0, 300)}`);
@@ -72,10 +77,35 @@ ${meeting.transcript}`;
     tagNames = Array.isArray(parsed.tags) ? parsed.tags : [];
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ error: `タグ生成に失敗しました: ${msg.slice(0, 200)}` }, { status: 500 });
+    console.error(
+      `[backfill-tags] タグ生成失敗 meeting_id=${meeting_id} title="${meeting.title}" transcriptLen=${meeting.transcript.length}:`,
+      e
+    );
+    return NextResponse.json(
+      { error: `タグ生成に失敗しました: ${msg.slice(0, 300)}`, meeting_id, meeting_title: meeting.title },
+      { status: 500 }
+    );
   }
 
-  const tags = await saveMeetingTags(user.id, meeting_id, tagNames);
+  if (tagNames.length === 0) {
+    console.error(`[backfill-tags] タグが0件 meeting_id=${meeting_id} title="${meeting.title}"`);
+    return NextResponse.json(
+      { error: "AIがタグを生成しませんでした", meeting_id, meeting_title: meeting.title },
+      { status: 500 }
+    );
+  }
+
+  let tags: string[];
+  try {
+    tags = await saveMeetingTags(user.id, meeting_id, tagNames);
+  } catch (e) {
+    console.error(`[backfill-tags] タグ保存失敗 meeting_id=${meeting_id} title="${meeting.title}":`, e);
+    const msg = e instanceof Error ? e.message : String(e);
+    return NextResponse.json(
+      { error: `タグ保存に失敗しました: ${msg.slice(0, 300)}`, meeting_id, meeting_title: meeting.title },
+      { status: 500 }
+    );
+  }
 
   return NextResponse.json({ success: true, tags });
 }

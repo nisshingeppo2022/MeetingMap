@@ -9,12 +9,39 @@ interface UntaggedMeeting {
   date: string;
 }
 
+interface FailedMeeting extends UntaggedMeeting {
+  status: number | null;
+  message: string;
+}
+
+async function runOne(meetingId: string): Promise<{ ok: boolean; status: number | null; message: string }> {
+  try {
+    const res = await fetch("/api/ai/backfill-tags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ meeting_id: meetingId }),
+    });
+    if (res.ok) return { ok: true, status: res.status, message: "" };
+    const text = await res.text();
+    let message = text;
+    try {
+      const data = JSON.parse(text);
+      message = data.error ?? text;
+    } catch {
+      // JSONでない場合(プラットフォーム側のタイムアウトページ等)はそのまま表示
+    }
+    return { ok: false, status: res.status, message: message.slice(0, 300) };
+  } catch (e) {
+    return { ok: false, status: null, message: (e as Error).message || "ネットワークエラー" };
+  }
+}
+
 export default function BackfillPage() {
   const [meetings, setMeetings] = useState<UntaggedMeeting[]>([]);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [errors, setErrors] = useState<UntaggedMeeting[]>([]);
+  const [errors, setErrors] = useState<FailedMeeting[]>([]);
 
   async function load() {
     setLoading(true);
@@ -28,40 +55,39 @@ export default function BackfillPage() {
     load();
   }, []);
 
-  async function runOne(meetingId: string): Promise<boolean> {
-    try {
-      const res = await fetch("/api/ai/backfill-tags", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ meeting_id: meetingId }),
-      });
-      return res.ok;
-    } catch {
-      return false;
-    }
-  }
-
   async function runAll() {
     setRunning(true);
     setProgress(0);
     setErrors([]);
     const targets = meetings;
-    const failed: UntaggedMeeting[] = [];
+    const failed: FailedMeeting[] = [];
     for (let i = 0; i < targets.length; i++) {
-      const ok = await runOne(targets[i].id);
-      if (!ok) failed.push(targets[i]);
+      const result = await runOne(targets[i].id);
+      if (!result.ok) {
+        failed.push({ ...targets[i], status: result.status, message: result.message });
+      }
       setProgress(i + 1);
+      // Geminiのレート制限に配慮して次のリクエストまで少し間隔を空ける
+      if (i < targets.length - 1) {
+        await new Promise((r) => setTimeout(r, 1500));
+      }
     }
     setErrors(failed);
     setRunning(false);
     await load();
   }
 
-  async function retryOne(meeting: UntaggedMeeting) {
-    const ok = await runOne(meeting.id);
-    if (ok) {
+  async function retryOne(meeting: FailedMeeting) {
+    const result = await runOne(meeting.id);
+    if (result.ok) {
       setErrors((prev) => prev.filter((e) => e.id !== meeting.id));
       await load();
+    } else {
+      setErrors((prev) =>
+        prev.map((e) =>
+          e.id === meeting.id ? { ...e, status: result.status, message: result.message } : e
+        )
+      );
     }
   }
 
@@ -94,17 +120,23 @@ export default function BackfillPage() {
             )}
 
             {errors.length > 0 && (
-              <div className="bg-red-50 rounded-2xl p-4 space-y-2">
+              <div className="bg-red-50 rounded-2xl p-4 space-y-3">
                 <p className="text-sm text-red-600 font-medium">失敗した会議({errors.length}件)</p>
                 {errors.map((e) => (
-                  <div key={e.id} className="flex items-center justify-between text-sm gap-2">
-                    <span className="text-gray-700 truncate">{e.title ?? "タイトルなし"}</span>
-                    <button
-                      onClick={() => retryOne(e)}
-                      className="text-indigo-600 underline text-xs flex-shrink-0"
-                    >
-                      再試行
-                    </button>
+                  <div key={e.id} className="border-t border-red-100 pt-2 first:border-t-0 first:pt-0 space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm text-gray-700 truncate">{e.title ?? "タイトルなし"}</span>
+                      <button
+                        onClick={() => retryOne(e)}
+                        className="text-indigo-600 underline text-xs flex-shrink-0"
+                      >
+                        再試行
+                      </button>
+                    </div>
+                    <p className="text-xs text-red-500 break-words">
+                      {e.status !== null ? `HTTP ${e.status}: ` : ""}
+                      {e.message}
+                    </p>
                   </div>
                 ))}
               </div>
