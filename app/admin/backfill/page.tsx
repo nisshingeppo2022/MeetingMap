@@ -43,6 +43,25 @@ export default function BackfillPage() {
   const [progress, setProgress] = useState(0);
   const [errors, setErrors] = useState<FailedMeeting[]>([]);
 
+  const [generatingLinks, setGeneratingLinks] = useState(false);
+  const [linkResult, setLinkResult] = useState<{ created: number; skipped: number } | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
+
+  async function generateCrossLinks() {
+    setGeneratingLinks(true);
+    setLinkError(null);
+    setLinkResult(null);
+    try {
+      const res = await fetch("/api/crosslinks/generate-from-tags", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setLinkResult(data);
+    } catch (e) {
+      setLinkError((e as Error).message || "クロスリンク生成に失敗しました");
+    }
+    setGeneratingLinks(false);
+  }
+
   async function load() {
     setLoading(true);
     const res = await fetch("/api/ai/backfill-tags");
@@ -141,6 +160,28 @@ export default function BackfillPage() {
                 ))}
               </div>
             )}
+
+            <div className="bg-white rounded-2xl border border-gray-100 p-4 shadow-sm space-y-3">
+              <div>
+                <p className="text-sm font-semibold text-gray-800">クロスリンク生成</p>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  タグを共有する会議同士を自動でクロスリンクします(AI不使用・即時完了)
+                </p>
+              </div>
+              <button
+                onClick={generateCrossLinks}
+                disabled={generatingLinks}
+                className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-semibold py-3 rounded-2xl transition-colors shadow-sm text-sm"
+              >
+                {generatingLinks ? "生成中..." : "クロスリンク生成"}
+              </button>
+              {linkResult && (
+                <p className="text-xs text-green-600">
+                  {linkResult.created}件のクロスリンクを生成しました(既存{linkResult.skipped}件はスキップ)
+                </p>
+              )}
+              {linkError && <p className="text-xs text-red-500 break-words">{linkError}</p>}
+            </div>
           </>
         )}
       </main>

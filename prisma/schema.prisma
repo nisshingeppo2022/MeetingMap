@@ -117,6 +117,7 @@ model CrossLink {
   isAiGenerated      Boolean           @default(true) @map("is_ai_generated")
   isAccepted         Boolean?          @map("is_accepted")
   isVisible          Boolean           @default(true) @map("is_visible")
+  sharedTags         String[]          @default([]) @map("shared_tags")
   createdAt          DateTime          @default(now()) @map("created_at")
 
   fromNode           MindmapNode       @relation("CrossLinkFrom", fields: [fromNodeId], references: [id], onDelete: Cascade)

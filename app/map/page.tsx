@@ -1,7 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { ALL_LANES, assignLane } from "@/lib/lanes";
+
+/* ===== LEGACY: React Flowツリー表示で使用していたimport(未使用、参照用に保持) =====
 import { useRouter } from "next/navigation";
 import ReactFlow, {
   Node, Edge,
@@ -10,8 +13,10 @@ import ReactFlow, {
   EdgeProps, getBezierPath, useReactFlow,
   ReactFlowProvider,
 } from "reactflow";
+===== LEGACY ここまで ===== */
 
 // ---- 型定義 ----
+/* ===== LEGACY: React Flowノード用データ型(未使用、参照用に保持) =====
 interface MindmapNodeData {
   id: string;
   meetingId: string;
@@ -25,6 +30,7 @@ interface MindmapNodeData {
   onHide: (id: string) => void;
   onStar: (id: string, current: boolean) => void;
 }
+===== LEGACY ここまで ===== */
 
 interface CrossLinkData {
   id: string;
@@ -60,7 +66,75 @@ interface Meeting {
   meetingContacts: { contact: { id: string; name: string; organization: string | null } }[];
 }
 
-// ---- 定数 ----
+// ---- スイムレーンマップ用の型 ----
+interface OverviewTag {
+  id: string;
+  name: string;
+  status: string;
+}
+
+interface OverviewMeeting {
+  id: string;
+  title: string | null;
+  date: string;
+  createdAt: string;
+  nodeCount: number;
+  tags: OverviewTag[];
+}
+
+interface OverviewCrossLink {
+  id: string;
+  fromMeetingId: string;
+  toMeetingId: string;
+  strength: "strong" | "medium" | "weak";
+  sharedTags: string[];
+}
+
+interface ExpandedNode {
+  id: string;
+  label: string;
+  nodeType: string;
+  isStarred: boolean;
+}
+
+// ---- スイムレーンレイアウト定数 ----
+const LANE_HEIGHT = 90;
+const SWIMLANE_NODE_WIDTH = 150;
+const TIMELINE_PADDING = 60;
+const MIN_TIMELINE_WIDTH = 900;
+const PX_PER_MEETING = 90;
+
+function laneY(laneId: string): number {
+  const idx = ALL_LANES.findIndex((l) => l.id === laneId);
+  return (idx === -1 ? ALL_LANES.length - 1 : idx) * LANE_HEIGHT + LANE_HEIGHT / 2;
+}
+
+function computeSwimlaneLayout(meetings: OverviewMeeting[]) {
+  const positions = new Map<string, { x: number; laneId: string }>();
+  if (meetings.length === 0) return { positions, width: MIN_TIMELINE_WIDTH };
+
+  const times = meetings.map((m) => new Date(m.createdAt).getTime());
+  const minT = Math.min(...times);
+  const maxT = Math.max(...times);
+  const width = Math.max(MIN_TIMELINE_WIDTH, meetings.length * PX_PER_MEETING);
+  const usableWidth = width - TIMELINE_PADDING * 2;
+
+  meetings.forEach((m) => {
+    const t = new Date(m.createdAt).getTime();
+    const ratio = maxT === minT ? 0.5 : (t - minT) / (maxT - minT);
+    const x = TIMELINE_PADDING + ratio * usableWidth;
+    const laneId = assignLane(m.tags.map((tag) => tag.name));
+    positions.set(m.id, { x, laneId });
+  });
+
+  return { positions, width };
+}
+
+function isClosedTopicMeeting(m: OverviewMeeting): boolean {
+  return m.tags.some((t) => t.status === "closed" || t.status === "cancelled");
+}
+
+/* ===== LEGACY: React Flowツリー表示の定数(未使用、参照用に保持) =====
 const NODE_HEIGHT = 38;
 const NODE_GAP = 10;
 const LEVEL_WIDTH = 200;
@@ -141,7 +215,6 @@ function MindmapNodeComponent({ data }: { data: MindmapNodeData }) {
         {data.label}
       </span>
 
-      {/* 星ボタン：星あり→常時表示、星なし→ホバー時表示 */}
       {(data.isStarred || hovered) && (
         <span
           title={data.isStarred ? "星を外す" : "クロスリンク候補にする"}
@@ -161,7 +234,6 @@ function MindmapNodeComponent({ data }: { data: MindmapNodeData }) {
         </span>
       )}
 
-      {/* 非表示ボタン（root以外、ホバー時にノード内右端に表示） */}
       {hovered && (
         <span
           title="非表示にする"
@@ -216,16 +288,12 @@ function CrossLinkEdge({ id, sourceX, sourceY, targetX, targetY, data }: EdgePro
 
 const nodeTypes = { mindmap: MindmapNodeComponent };
 const edgeTypes = { crossLink: CrossLinkEdge };
+===== LEGACY ここまで ===== */
 
 // ---- メインコンポーネント ----
 function MapInner() {
-  const router = useRouter();
-  const { fitView } = useReactFlow();
-
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [crossLinks, setCrossLinks] = useState<CrossLinkData[]>([]);
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
@@ -233,21 +301,39 @@ function MapInner() {
   const [analyzeResult, setAnalyzeResult] = useState("");
   const [view, setView] = useState<"map" | "list" | "person" | "theme" | "conflict" | "synthesis">("map");
   const [selectedCrossLink, setSelectedCrossLink] = useState<CrossLinkData | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
+  // ---- スイムレーンマップ用の状態 ----
+  const [swimlaneData, setSwimlaneData] = useState<{ meetings: OverviewMeeting[]; crossLinks: OverviewCrossLink[] }>({
+    meetings: [],
+    crossLinks: [],
+  });
+  const [swimlaneLoading, setSwimlaneLoading] = useState(true);
+  const [swimlaneError, setSwimlaneError] = useState("");
+  const [hiddenLanes, setHiddenLanes] = useState<Set<string>>(new Set());
+  const [showClosed, setShowClosed] = useState(false);
+  const [expandedMeetingId, setExpandedMeetingId] = useState<string | null>(null);
+  const [expandedNodesCache, setExpandedNodesCache] = useState<Map<string, ExpandedNode[]>>(new Map());
+  const [expandedLoading, setExpandedLoading] = useState(false);
+
+  const swimlaneLayout = useMemo(() => computeSwimlaneLayout(swimlaneData.meetings), [swimlaneData.meetings]);
+
+  /* ===== LEGACY: React Flowツリー表示専用の状態(未使用、参照用に保持) =====
+  const router = useRouter();
+  const { fitView } = useReactFlow();
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const collapsedRef = useRef<Set<string>>(new Set());
-  // meetings の最新値を ref でも保持（星更新時に setMeetings を避けるため）
   const meetingsRef = useRef<Meeting[]>([]);
-  // 全ノードの親子マップ（ドラッグ追従用）
   const globalChildMapRef = useRef<Map<string, string[]>>(new Map());
-  // ドラッグ中の直前位置
   const dragPrevPosRef = useRef<{ x: number; y: number } | null>(null);
 
   const handleCrossLinkClick = useCallback((cl: CrossLinkData) => {
     setSelectedCrossLink(cl);
   }, []);
+  ===== LEGACY ここまで ===== */
 
-  // ---- データ取得 ----
+  // ---- データ取得(リスト/人物別/テーマ別/対立/合成タブ用) ----
   async function fetchData() {
     setLoading(true);
     setFetchError("");
@@ -261,8 +347,6 @@ function MapInner() {
       const cd: CrossLinkData[] = cr.ok ? await cr.json() : [];
       const filtered = Array.isArray(md) ? md.filter((m) => m.mindmapNodes.length > 0) : [];
       const crossLinkData = Array.isArray(cd) ? cd : [];
-      console.log(`[fetchData] meetings: ${filtered.length}, crossLinks: ${crossLinkData.length}`);
-      meetingsRef.current = filtered;
       setMeetings(filtered);
       setCrossLinks(crossLinkData);
     } catch (e) {
@@ -274,7 +358,63 @@ function MapInner() {
 
   useEffect(() => { fetchData(); }, []);
 
-  // ---- グラフ構築 ----
+  // ---- スイムレーンマップ用データ取得(軽量、ノード本体は含まない) ----
+  async function fetchSwimlaneOverview() {
+    setSwimlaneLoading(true);
+    setSwimlaneError("");
+    try {
+      const res = await fetch("/api/map/overview");
+      if (!res.ok) throw new Error(`概要取得エラー: ${res.status}`);
+      const data = await res.json();
+      setSwimlaneData({ meetings: data.meetings ?? [], crossLinks: data.crossLinks ?? [] });
+    } catch (e) {
+      setSwimlaneError(e instanceof Error ? e.message : "データ取得に失敗しました");
+    } finally {
+      setSwimlaneLoading(false);
+    }
+  }
+
+  useEffect(() => { fetchSwimlaneOverview(); }, []);
+
+  function toggleLane(laneId: string) {
+    setHiddenLanes((prev) => {
+      const next = new Set(prev);
+      if (next.has(laneId)) next.delete(laneId); else next.add(laneId);
+      return next;
+    });
+  }
+
+  // ---- 会議ノードのクリックで展開(ルートノード+星付きノードを遅延取得) ----
+  async function handleNodeClick(meetingId: string) {
+    if (expandedMeetingId === meetingId) {
+      setExpandedMeetingId(null);
+      return;
+    }
+    setExpandedMeetingId(meetingId);
+    if (expandedNodesCache.has(meetingId)) return;
+
+    setExpandedLoading(true);
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}`);
+      if (res.ok) {
+        const data: { mindmapNodes?: ExpandedNode[] } = await res.json();
+        const filtered = (data.mindmapNodes ?? []).filter((n) => n.nodeType === "root" || n.isStarred);
+        setExpandedNodesCache((prev) => new Map(prev).set(meetingId, filtered));
+      }
+    } finally {
+      setExpandedLoading(false);
+    }
+  }
+
+  const visibleSwimlaneMeetings = swimlaneData.meetings.filter((m) => {
+    const laneId = swimlaneLayout.positions.get(m.id)?.laneId ?? "other";
+    if (hiddenLanes.has(laneId)) return false;
+    if (!showClosed && isClosedTopicMeeting(m)) return false;
+    return true;
+  });
+  const visibleSwimlaneMeetingIds = new Set(visibleSwimlaneMeetings.map((m) => m.id));
+
+  /* ===== LEGACY: React Flowグラフ構築処理(未使用、参照用に保持) =====
   function buildGraph(
     meetingList: Meeting[],
     crossLinkList: CrossLinkData[],
@@ -293,7 +433,6 @@ function MapInner() {
       const mNodes = meeting.mindmapNodes;
       if (mNodes.length === 0) continue;
 
-      // 全ノードで親子マップとIDマップを構築（isVisibleに関係なく全て）
       const childMap = new Map<string, string[]>();
       const nodeMap = new Map<string, MindmapNodeRaw>();
       let root: MindmapNodeRaw | undefined;
@@ -305,7 +444,6 @@ function MapInner() {
       }
       if (!root) { currentY += NODE_HEIGHT + MEETING_GAP; continue; }
 
-      // グローバル親子マップに統合
       childMap.forEach((cids, pid) => newGlobalChildMap.set(pid, cids));
 
       const treeH = calcSubtreeHeight(root.id, childMap, collapsedSet);
@@ -313,7 +451,6 @@ function MapInner() {
       assignPositions(root.id, 0, currentY + treeH / 2, childMap, collapsedSet, positions);
       positions.forEach((pos, nid) => nodePositions.set(nid, pos));
 
-      // 可視ノード収集（isVisible=falseは自身+子孫をスキップ）
       const visibleNodes = new Set<string>();
       const collectVisible = (id: string) => {
         const n = nodeMap.get(id);
@@ -324,7 +461,6 @@ function MapInner() {
       };
       collectVisible(root.id);
 
-      // フローノード生成（エッジなし = 線なし）
       for (const n of mNodes) {
         if (!n.isVisible || !visibleNodes.has(n.id)) continue;
         const pos = positions.get(n.id);
@@ -358,13 +494,10 @@ function MapInner() {
       currentY += treeH + MEETING_GAP;
     }
 
-    // クロスリンクエッジ（両ノードが表示されている場合のみ）
     const renderedNodeIds = new Set(flowNodes.map((n) => n.id));
-    console.log(`[buildGraph] flowNodes: ${flowNodes.length}, crossLinks: ${crossLinkList.length}, renderedNodeIds: ${renderedNodeIds.size}`);
     for (const cl of crossLinkList) {
       const fromOk = renderedNodeIds.has(cl.fromNodeId);
       const toOk = renderedNodeIds.has(cl.toNodeId);
-      console.log(`[buildGraph] crosslink ${cl.id}: from=${cl.fromNodeId}(${fromOk}) to=${cl.toNodeId}(${toOk})`);
       if (!fromOk || !toOk) continue;
       flowEdges.push({
         id: `cl-${cl.id}`,
@@ -375,7 +508,6 @@ function MapInner() {
         zIndex: 10,
       });
     }
-    console.log(`[buildGraph] flowEdges (crosslinks): ${flowEdges.length}`);
 
     globalChildMapRef.current = newGlobalChildMap;
     setNodes(flowNodes);
@@ -389,7 +521,6 @@ function MapInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meetings, crossLinks]);
 
-  // 折りたたみ変更時は現在位置を維持（fitViewしない、refを使う）
   useEffect(() => {
     if (meetingsRef.current.length === 0) return;
     buildGraph(meetingsRef.current, crossLinks, collapsed, handleCrossLinkClick, false);
@@ -403,14 +534,12 @@ function MapInner() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ isStarred: !current }),
     });
-    // refを更新（setMeetingsを使うとfitViewが走るため回避）
     meetingsRef.current = meetingsRef.current.map((m) => ({
       ...m,
       mindmapNodes: m.mindmapNodes.map((n) =>
         n.id === nodeId ? { ...n, isStarred: !current } : n
       ),
     }));
-    // React Flowのノードデータだけ直接更新（現在の表示位置を維持）
     setNodes((prev) =>
       prev.map((n) =>
         n.id === nodeId
@@ -427,7 +556,6 @@ function MapInner() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ isVisible: false }),
     });
-    // 子孫ノードも含めて即時除去
     const toRemove = new Set<string>([nodeId]);
     const collect = (id: string) => {
       for (const cid of globalChildMapRef.current.get(id) ?? []) {
@@ -452,7 +580,6 @@ function MapInner() {
     const dy = draggedNode.position.y - prev.y;
     dragPrevPosRef.current = { x: draggedNode.position.x, y: draggedNode.position.y };
 
-    // 子孫を収集して同じだけ移動
     const descendants = new Set<string>();
     const collect = (id: string) => {
       for (const cid of globalChildMapRef.current.get(id) ?? []) {
@@ -471,6 +598,7 @@ function MapInner() {
       )
     );
   }, [setNodes]);
+  ===== LEGACY ここまで ===== */
 
   // ---- AI分析 ----
   async function handleAnalyze() {
@@ -482,7 +610,7 @@ function MapInner() {
       const d = await res.json().catch(() => ({}) as { count?: number });
       const count = (d as { count?: number }).count ?? 0;
       if (count > 0) {
-        setAnalyzeResult(`${count}件の関連を検出しました（合成・共通課題・コンフリクトを含む）`);
+        setAnalyzeResult(`${count}件の関連を検出しました(合成・共通課題・コンフリクトを含む)`);
       } else {
         setAnalyzeResult("ミーティング間の関連は見つかりませんでした。");
       }
@@ -558,10 +686,162 @@ function MapInner() {
         </div>
       </div>
 
-      {/* コンテンツ */}
+      {fetchError && view !== "map" && (
+        <p className="text-xs text-red-500 text-center py-1 bg-red-50 flex-shrink-0">{fetchError}</p>
+      )}
+
+      {/* スイムレーンマップ */}
+      {view === "map" && (
+        <div style={{ flex: 1, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          {(swimlaneLoading || swimlaneError || swimlaneData.meetings.length === 0) ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-3">
+              {swimlaneLoading && <p className="text-gray-400 text-sm">読み込み中...</p>}
+              {!swimlaneLoading && swimlaneError && (
+                <>
+                  <p className="text-red-500 text-sm">{swimlaneError}</p>
+                  <button onClick={fetchSwimlaneOverview} className="text-indigo-600 text-sm">再試行</button>
+                </>
+              )}
+              {!swimlaneLoading && !swimlaneError && swimlaneData.meetings.length === 0 && (
+                <>
+                  <p className="text-gray-400 text-sm">分析済みのミーティングがありません</p>
+                  <Link href="/meetings/new" className="text-indigo-600 text-sm">ミーティングを始める</Link>
+                </>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* フィルター */}
+              <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-gray-100 bg-white flex-shrink-0">
+                {ALL_LANES.map((lane) => (
+                  <button key={lane.id} onClick={() => toggleLane(lane.id)}
+                    className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                      hiddenLanes.has(lane.id)
+                        ? "bg-gray-50 text-gray-300 border-gray-100"
+                        : "bg-indigo-50 text-indigo-600 border-indigo-100"
+                    }`}>
+                    {lane.label}
+                  </button>
+                ))}
+                <label className="flex items-center gap-1.5 text-xs text-gray-500 ml-1">
+                  <input type="checkbox" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} />
+                  終了した話題を表示
+                </label>
+              </div>
+
+              {/* スイムレーン本体 */}
+              <div className="flex-1 flex overflow-hidden">
+                {/* レーンラベル(固定、横スクロールしない) */}
+                <div className="flex-shrink-0 border-r border-gray-100 bg-white">
+                  {ALL_LANES.map((lane) => (
+                    <div key={lane.id} style={{ height: LANE_HEIGHT, width: 110 }}
+                      className="flex items-center px-2 text-xs font-medium text-gray-500 border-b border-gray-50">
+                      {lane.label}
+                    </div>
+                  ))}
+                </div>
+
+                {/* タイムライン(横スクロール) */}
+                <div className="flex-1 overflow-auto relative">
+                  <div style={{ width: swimlaneLayout.width, height: ALL_LANES.length * LANE_HEIGHT, position: "relative" }}>
+                    {/* レーン区切り線 */}
+                    {ALL_LANES.map((lane, i) => (
+                      <div key={lane.id}
+                        style={{ position: "absolute", top: i * LANE_HEIGHT, left: 0, right: 0, height: LANE_HEIGHT }}
+                        className="border-b border-gray-50" />
+                    ))}
+
+                    {/* クロスリンク */}
+                    <svg
+                      style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
+                      width={swimlaneLayout.width}
+                      height={ALL_LANES.length * LANE_HEIGHT}
+                    >
+                      {swimlaneData.crossLinks
+                        .filter((cl) => visibleSwimlaneMeetingIds.has(cl.fromMeetingId) && visibleSwimlaneMeetingIds.has(cl.toMeetingId))
+                        .map((cl) => {
+                          const from = swimlaneLayout.positions.get(cl.fromMeetingId);
+                          const to = swimlaneLayout.positions.get(cl.toMeetingId);
+                          if (!from || !to) return null;
+                          const fromY = laneY(from.laneId);
+                          const toY = laneY(to.laneId);
+                          const count = cl.sharedTags.length || 1;
+                          const strokeWidth = count >= 3 ? 4 : count === 2 ? 2.5 : 1.5;
+                          const opacity = count >= 3 ? 0.8 : count === 2 ? 0.5 : 0.3;
+                          const sameLane = from.laneId === to.laneId;
+                          const d = sameLane
+                            ? `M ${from.x} ${fromY} L ${to.x} ${toY}`
+                            : `M ${from.x} ${fromY} C ${from.x} ${(fromY + toY) / 2}, ${to.x} ${(fromY + toY) / 2}, ${to.x} ${toY}`;
+                          return (
+                            <path key={cl.id} d={d} fill="none" stroke="#6366f1"
+                              strokeWidth={strokeWidth} opacity={opacity} style={{ pointerEvents: "stroke" }}>
+                              <title>{cl.sharedTags.join("、")}</title>
+                            </path>
+                          );
+                        })}
+                    </svg>
+
+                    {/* 会議ノード */}
+                    {visibleSwimlaneMeetings.map((m) => {
+                      const pos = swimlaneLayout.positions.get(m.id);
+                      if (!pos) return null;
+                      const y = laneY(pos.laneId);
+                      return (
+                        <div key={m.id} onClick={() => handleNodeClick(m.id)}
+                          style={{ position: "absolute", left: pos.x - SWIMLANE_NODE_WIDTH / 2, top: y - 24, width: SWIMLANE_NODE_WIDTH }}
+                          className="bg-white border border-indigo-200 rounded-lg shadow-sm px-2 py-1.5 cursor-pointer hover:border-indigo-400 transition-colors z-10">
+                          <p className="text-xs font-medium text-gray-800 truncate">{m.title ?? "タイトルなし"}</p>
+                          <div className="flex items-center justify-between mt-0.5">
+                            <span className="text-[10px] text-gray-400">
+                              {new Date(m.date).toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })}
+                            </span>
+                            <span className="text-[10px] bg-indigo-50 text-indigo-500 px-1 rounded">{m.nodeCount}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* クリックで展開するポップオーバー */}
+                    {expandedMeetingId && (() => {
+                      const pos = swimlaneLayout.positions.get(expandedMeetingId);
+                      if (!pos) return null;
+                      const y = laneY(pos.laneId);
+                      const nodesForPopover = expandedNodesCache.get(expandedMeetingId) ?? [];
+                      return (
+                        <div
+                          style={{ position: "absolute", left: pos.x - SWIMLANE_NODE_WIDTH / 2, top: y + 28, width: 220, zIndex: 30 }}
+                          className="bg-white rounded-xl shadow-lg border border-gray-100 p-3">
+                          {expandedLoading ? (
+                            <p className="text-xs text-gray-400">読み込み中...</p>
+                          ) : (
+                            <>
+                              <ul className="space-y-1 text-xs text-gray-700 max-h-40 overflow-y-auto">
+                                {nodesForPopover.map((n) => (
+                                  <li key={n.id} className="flex items-center gap-1">
+                                    <span>{n.nodeType === "root" ? "🏠" : "⭐"}</span>
+                                    <span className="truncate">{n.label}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                              <Link href={`/meetings/${expandedMeetingId}/result`} className="text-indigo-600 text-xs underline mt-2 inline-block">
+                                詳細を見る →
+                              </Link>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ===== LEGACY: React Flowツリー表示(参照用に保持、未使用) =====
       {view === "map" && (
         <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
-          {/* ローディング・エラー・空状態（ReactFlowはアンマウントせずCSSで隠す） */}
           {(loading || fetchError || meetings.length === 0) && (
             <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, zIndex: 5, background: "#f9fafb" }}>
               {loading && <p style={{ color: "#9ca3af", fontSize: 14 }}>読み込み中...</p>}
@@ -575,7 +855,6 @@ function MapInner() {
               </>}
             </div>
           )}
-          {/* ReactFlowは常にマウント（再マウントでedgeTypesがリセットされないよう） */}
           <div style={{ position: "absolute", inset: 0, visibility: (loading || fetchError || meetings.length === 0) ? "hidden" : "visible" }}>
             <ReactFlow
               nodes={nodes}
@@ -606,7 +885,6 @@ function MapInner() {
             </ReactFlow>
           </div>
 
-          {/* クロスリンク詳細パネル */}
           {selectedCrossLink && (
             <div className="absolute bottom-20 left-4 right-4 sm:left-auto sm:right-4 sm:w-96 bg-white rounded-2xl shadow-xl border border-gray-100 p-4 z-20">
               <div className="flex items-start justify-between mb-3">
@@ -655,6 +933,7 @@ function MapInner() {
           )}
         </div>
       )}
+      ===== LEGACY ここまで ===== */}
 
       {/* リストビュー */}
       {view === "list" && (
@@ -726,7 +1005,6 @@ function MapInner() {
             {loading ? (
               <p className="text-center text-gray-400 text-sm py-12">読み込み中...</p>
             ) : (() => {
-              // 人物ごとにミーティングを集計
               const personMap = new Map<string, { name: string; org: string | null; meetings: Meeting[] }>();
               for (const m of meetings) {
                 for (const mc of m.meetingContacts ?? []) {
@@ -877,7 +1155,7 @@ function MapInner() {
                 <>
                   {syntheses.length > 0 && (
                     <div>
-                      <h3 className="text-xs font-semibold text-gray-400 mb-2 px-1">合成チャンス（{syntheses.length}件）</h3>
+                      <h3 className="text-xs font-semibold text-gray-400 mb-2 px-1">合成チャンス({syntheses.length}件)</h3>
                       <div className="space-y-3">
                         {syntheses.map((cl) => (
                           <div key={cl.id} className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-4">
@@ -903,7 +1181,7 @@ function MapInner() {
                   )}
                   {commonIssues.length > 0 && (
                     <div>
-                      <h3 className="text-xs font-semibold text-gray-400 mb-2 px-1">共通課題（{commonIssues.length}件）</h3>
+                      <h3 className="text-xs font-semibold text-gray-400 mb-2 px-1">共通課題({commonIssues.length}件)</h3>
                       <div className="space-y-3">
                         {commonIssues.map((cl) => (
                           <div key={cl.id} className="bg-white rounded-2xl border border-green-100 shadow-sm p-4">
@@ -933,9 +1211,5 @@ function MapInner() {
 }
 
 export default function MapPage() {
-  return (
-    <ReactFlowProvider>
-      <MapInner />
-    </ReactFlowProvider>
-  );
+  return <MapInner />;
 }
