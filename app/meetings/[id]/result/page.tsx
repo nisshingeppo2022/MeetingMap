@@ -390,7 +390,19 @@ export default function ResultPage() {
         setShareUrl(url);
         // モバイル: ネイティブ共有シートを使う
         if (navigator.share) {
-          await navigator.share({ title: meeting?.title ?? "ミーティング", url });
+          try {
+            await navigator.share({ title: meeting?.title ?? "ミーティング", url });
+          } catch (shareErr) {
+            // ネイティブ共有のキャンセルは無視。それ以外の失敗はリンク自体は作成済みなのでコピーにフォールバック
+            if ((shareErr as Error).name !== "AbortError") {
+              const ok = await copyToClipboard(url);
+              if (ok) {
+                showToast("共有URLをコピーしました", "success");
+              } else {
+                window.prompt("URLをコピーしてください:", url);
+              }
+            }
+          }
         } else {
           // デスクトップ: クリップボードにコピー
           const ok = await copyToClipboard(url);
@@ -405,10 +417,7 @@ export default function ResultPage() {
         showToast("共有リンクの作成に失敗しました", "error");
       }
     } catch (e) {
-      // navigator.share のキャンセルは無視
-      if ((e as Error).name !== "AbortError") {
-        showToast("共有リンクの作成に失敗しました", "error");
-      }
+      showToast("共有リンクの作成に失敗しました", "error");
     }
     setSharing(false);
   }
