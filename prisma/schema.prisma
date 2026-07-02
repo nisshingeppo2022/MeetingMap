@@ -48,6 +48,7 @@ model Meeting {
   meetingContacts     MeetingContact[]
   mindmapNodes        MindmapNode[]
   topicItemMeetings   TopicItemMeeting[]
+  meetingTopics       MeetingTopic[]
 
   @@map("meetings")
 }
@@ -141,14 +142,28 @@ model Topic {
   id        String    @id @default(uuid())
   userId    String    @map("user_id")
   name      String    @db.VarChar(100)
-  icon      String?   @db.VarChar(10)
-  color     String?   @db.VarChar(20)
-  sortOrder Int?      @map("sort_order")
+  status    String    @default("active") @db.VarChar(20)
   createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
 
-  items     TopicItem[]
+  items         TopicItem[]
+  meetingTopics MeetingTopic[]
 
+  @@unique([userId, name])
   @@map("topics")
+}
+
+model MeetingTopic {
+  id        String   @id @default(uuid())
+  meetingId String   @map("meeting_id")
+  topicId   String   @map("topic_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  meeting   Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  topic     Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, topicId])
+  @@map("meeting_topics")
 }
 
 model TopicItem {

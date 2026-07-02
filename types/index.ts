@@ -30,6 +30,7 @@ export interface TranscriptSegment {
 
 export interface AiAnalysisResult {
   root: { label: string };
+  tags?: string[];
   nodes: AiNode[];
   topics: AiTopicCategory[];
   suggested_relations: AiRelation[];

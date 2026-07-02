@@ -1,6 +1,7 @@
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { prisma } from "@/lib/prisma";
 import { generateContent, ANALYZE_PROMPT } from "@/lib/gemini";
+import { saveMeetingTags } from "@/lib/tags";
 import { NextRequest, NextResponse } from "next/server";
 import type { AiAnalysisResult, AiNode } from "@/types";
 
@@ -14,12 +15,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "meeting_id と transcript は必須です" }, { status: 400 });
   }
 
+  // 既存タグ一覧を取得(Geminiに既存タグの再利用を促すため)
+  const existingTags = await prisma.topic.findMany({
+    where: { userId: user.id, status: "active" },
+    select: { name: true },
+    orderBy: { name: "asc" },
+  });
+  const tagsListSection = existingTags.length
+    ? `\n- 既存タグ一覧: ${existingTags.map((t) => t.name).join("、")}`
+    : "";
+
   // Gemini に送信
   const agendaSection = agenda ? `\n- 事前メモ・話したかったこと:\n${agenda}` : "";
   const prompt = `${ANALYZE_PROMPT}
 
 ## ミーティング情報
-- 相手: ${contact_name ?? "不明"} (${contact_org ?? "不明"})${agendaSection}
+- 相手: ${contact_name ?? "不明"} (${contact_org ?? "不明"})${agendaSection}${tagsListSection}
 - 文字起こし:
 ${transcript}`;
 
@@ -120,10 +131,20 @@ ${transcript}`;
     }
   }
 
+  // タグの保存(失敗してもマインドマップ生成自体は成功として扱う)
+  let tags: string[] = [];
+  if (analysisResult.tags?.length) {
+    try {
+      tags = await saveMeetingTags(user.id, meeting_id, analysisResult.tags);
+    } catch (e) {
+      console.error("タグ保存に失敗:", e);
+    }
+  }
+
   const nodes = await prisma.mindmapNode.findMany({
     where: { meetingId: meeting_id },
     orderBy: { sortOrder: "asc" },
   });
 
-  return NextResponse.json({ success: true, nodes, analysis: analysisResult });
+  return NextResponse.json({ success: true, nodes, tags, analysis: analysisResult });
 }
