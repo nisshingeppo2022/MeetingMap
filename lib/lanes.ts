@@ -2,12 +2,14 @@ export interface Lane {
   id: string;
   label: string;
   tags: string[];
+  bgColor: string;
 }
 
 export const LANES: Lane[] = [
   {
     id: "stem",
     label: "🤖 STEM・教育",
+    bgColor: "#eff6ff",
     tags: [
       "ロボット教育",
       "情報教育の推進",
@@ -20,6 +22,7 @@ export const LANES: Lane[] = [
   {
     id: "community",
     label: "🤝 連携・組織",
+    bgColor: "#fefce8",
     tags: [
       "コミュニティ形成",
       "共同プロジェクト",
@@ -31,6 +34,7 @@ export const LANES: Lane[] = [
   {
     id: "school",
     label: "🏫 学校・支援",
+    bgColor: "#f0fdf4",
     tags: [
       "学びの多様化学校",
       "不登校支援",
@@ -42,6 +46,7 @@ export const LANES: Lane[] = [
   {
     id: "vision",
     label: "💡 ビジョン",
+    bgColor: "#faf5ff",
     tags: [
       "VR活動の可能性",
       "VRコンテンツ制作",
@@ -54,6 +59,7 @@ export const LANES: Lane[] = [
   {
     id: "management",
     label: "💰 運営・実務",
+    bgColor: "#fff7ed",
     tags: [
       "予算と調達",
       "活動の継続と発展",
@@ -64,7 +70,7 @@ export const LANES: Lane[] = [
   },
 ];
 
-export const OTHER_LANE: Lane = { id: "other", label: "その他", tags: [] };
+export const OTHER_LANE: Lane = { id: "other", label: "その他", tags: [], bgColor: "#f9fafb" };
 
 export const ALL_LANES: Lane[] = [...LANES, OTHER_LANE];
 

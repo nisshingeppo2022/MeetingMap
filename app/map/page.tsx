@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ALL_LANES, assignLane } from "@/lib/lanes";
 
@@ -98,36 +98,134 @@ interface ExpandedNode {
 }
 
 // ---- スイムレーンレイアウト定数 ----
-const LANE_HEIGHT = 90;
-const SWIMLANE_NODE_WIDTH = 150;
+const BASE_LANE_HEIGHT = 70;
+const NODE_LEVEL_SPACING = 34;
+const NODE_TOP_MARGIN = 22;
+const NODE_BOTTOM_MARGIN = 14;
+const COLLISION_THRESHOLD = 150;
+const SWIMLANE_NODE_WIDTH = 160;
 const TIMELINE_PADDING = 60;
 const MIN_TIMELINE_WIDTH = 900;
-const PX_PER_MEETING = 90;
+const MONTH_WIDTH = 300;
+const MONTH_HEADER_HEIGHT = 32;
+const LANE_LABEL_WIDTH = 112;
 
-function laneY(laneId: string): number {
-  const idx = ALL_LANES.findIndex((l) => l.id === laneId);
-  return (idx === -1 ? ALL_LANES.length - 1 : idx) * LANE_HEIGHT + LANE_HEIGHT / 2;
+interface MonthTick {
+  key: string;
+  year: number;
+  month: number; // 1-12
+  showYear: boolean;
 }
 
-function computeSwimlaneLayout(meetings: OverviewMeeting[]) {
-  const positions = new Map<string, { x: number; laneId: string }>();
-  if (meetings.length === 0) return { positions, width: MIN_TIMELINE_WIDTH };
+function getMonthKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
 
+// 会議日時の範囲から、抜けなく連続した月のリストを作る(会議がない月も含む)
+function buildMonthRange(meetings: OverviewMeeting[]): MonthTick[] {
+  if (meetings.length === 0) return [];
   const times = meetings.map((m) => new Date(m.createdAt).getTime());
-  const minT = Math.min(...times);
-  const maxT = Math.max(...times);
-  const width = Math.max(MIN_TIMELINE_WIDTH, meetings.length * PX_PER_MEETING);
-  const usableWidth = width - TIMELINE_PADDING * 2;
+  const minD = new Date(Math.min(...times));
+  const maxD = new Date(Math.max(...times));
+  const months: MonthTick[] = [];
+  let y = minD.getFullYear();
+  let m = minD.getMonth();
+  const endY = maxD.getFullYear();
+  const endM = maxD.getMonth();
+  let prevYear: number | null = null;
+  while (y < endY || (y === endY && m <= endM)) {
+    months.push({ key: `${y}-${String(m + 1).padStart(2, "0")}`, year: y, month: m + 1, showYear: prevYear !== y });
+    prevYear = y;
+    m++;
+    if (m > 11) { m = 0; y++; }
+  }
+  return months;
+}
 
+// 同レーン内でX座標が近いノードを検出し、重ならないよう縦方向のレベルを割り当てる
+// (レベル数に上限は設けず、最も密集したレーンに合わせてレーン高さを後で拡張する)
+function resolveCollisionLevels(items: { id: string; x: number }[]): Map<string, number> {
+  const sorted = [...items].sort((a, b) => a.x - b.x);
+  const placed: { x: number; level: number }[] = [];
+  const result = new Map<string, number>();
+  sorted.forEach((item) => {
+    const usedLevels = new Set(
+      placed.filter((p) => Math.abs(p.x - item.x) < COLLISION_THRESHOLD).map((p) => p.level)
+    );
+    let level = 0;
+    while (usedLevels.has(level)) level++;
+    result.set(item.id, level);
+    placed.push({ x: item.x, level });
+  });
+  return result;
+}
+
+interface SwimlaneLayout {
+  months: MonthTick[];
+  width: number;
+  laneHeight: number;
+  totalHeight: number;
+  nodePositions: Map<string, { x: number; y: number; laneId: string }>;
+}
+
+function computeSwimlaneLayout(meetings: OverviewMeeting[]): SwimlaneLayout {
+  const months = buildMonthRange(meetings);
+  if (months.length === 0) {
+    return { months, width: MIN_TIMELINE_WIDTH, laneHeight: BASE_LANE_HEIGHT, totalHeight: BASE_LANE_HEIGHT * ALL_LANES.length, nodePositions: new Map() };
+  }
+
+  const width = Math.max(MIN_TIMELINE_WIDTH, months.length * MONTH_WIDTH) + TIMELINE_PADDING * 2;
+
+  // 月ごとにグループ化し、月内は等幅で日付順に配置(密集期間の詰まりすぎ・閑散期間の間延びを防ぐ)
+  const byMonth = new Map<string, OverviewMeeting[]>();
   meetings.forEach((m) => {
-    const t = new Date(m.createdAt).getTime();
-    const ratio = maxT === minT ? 0.5 : (t - minT) / (maxT - minT);
-    const x = TIMELINE_PADDING + ratio * usableWidth;
-    const laneId = assignLane(m.tags.map((tag) => tag.name));
-    positions.set(m.id, { x, laneId });
+    const key = getMonthKey(new Date(m.createdAt));
+    if (!byMonth.has(key)) byMonth.set(key, []);
+    byMonth.get(key)!.push(m);
   });
 
-  return { positions, width };
+  const baseByLane = new Map<string, { id: string; x: number }[]>();
+  months.forEach((monthInfo, monthIdx) => {
+    const monthMeetings = (byMonth.get(monthInfo.key) ?? [])
+      .slice()
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    const monthStartX = TIMELINE_PADDING + monthIdx * MONTH_WIDTH;
+    const count = monthMeetings.length;
+    monthMeetings.forEach((m, i) => {
+      const fraction = count === 1 ? 0.5 : (i + 0.5) / count;
+      const x = monthStartX + fraction * MONTH_WIDTH;
+      const laneId = assignLane(m.tags.map((tag) => tag.name));
+      if (!baseByLane.has(laneId)) baseByLane.set(laneId, []);
+      baseByLane.get(laneId)!.push({ id: m.id, x });
+    });
+  });
+
+  // レーンごとに衝突レベルを解決し、全レーン中の最大レベルからレーン高さを決定
+  const levelsByLane = new Map<string, Map<string, number>>();
+  let maxLevel = 0;
+  baseByLane.forEach((items, laneId) => {
+    const levels = resolveCollisionLevels(items);
+    levelsByLane.set(laneId, levels);
+    levels.forEach((level) => { if (level > maxLevel) maxLevel = level; });
+  });
+
+  const laneHeight = Math.max(
+    BASE_LANE_HEIGHT,
+    NODE_TOP_MARGIN + (maxLevel + 1) * NODE_LEVEL_SPACING + NODE_BOTTOM_MARGIN
+  );
+
+  const nodePositions = new Map<string, { x: number; y: number; laneId: string }>();
+  baseByLane.forEach((items, laneId) => {
+    const laneIdx = ALL_LANES.findIndex((l) => l.id === laneId);
+    const top = (laneIdx === -1 ? ALL_LANES.length - 1 : laneIdx) * laneHeight;
+    const levels = levelsByLane.get(laneId)!;
+    items.forEach((item) => {
+      const level = levels.get(item.id) ?? 0;
+      nodePositions.set(item.id, { x: item.x, y: top + NODE_TOP_MARGIN + level * NODE_LEVEL_SPACING, laneId });
+    });
+  });
+
+  return { months, width, laneHeight, totalHeight: laneHeight * ALL_LANES.length, nodePositions };
 }
 
 function isClosedTopicMeeting(m: OverviewMeeting): boolean {
@@ -314,8 +412,23 @@ function MapInner() {
   const [expandedMeetingId, setExpandedMeetingId] = useState<string | null>(null);
   const [expandedNodesCache, setExpandedNodesCache] = useState<Map<string, ExpandedNode[]>>(new Map());
   const [expandedLoading, setExpandedLoading] = useState(false);
+  const [hoveredMeetingId, setHoveredMeetingId] = useState<string | null>(null);
+
+  const swimlaneScrollRef = useRef<HTMLDivElement>(null);
+  const hasScrolledInitially = useRef(false);
 
   const swimlaneLayout = useMemo(() => computeSwimlaneLayout(swimlaneData.meetings), [swimlaneData.meetings]);
+
+  // スマホでは最新の会議が見えるよう初期表示位置を右端にする
+  useEffect(() => {
+    if (hasScrolledInitially.current) return;
+    if (swimlaneLoading || swimlaneData.meetings.length === 0) return;
+    if (!swimlaneScrollRef.current) return;
+    if (window.innerWidth < 640) {
+      swimlaneScrollRef.current.scrollLeft = swimlaneScrollRef.current.scrollWidth;
+    }
+    hasScrolledInitially.current = true;
+  }, [swimlaneLoading, swimlaneData.meetings.length]);
 
   /* ===== LEGACY: React Flowツリー表示専用の状態(未使用、参照用に保持) =====
   const router = useRouter();
@@ -407,7 +520,7 @@ function MapInner() {
   }
 
   const visibleSwimlaneMeetings = swimlaneData.meetings.filter((m) => {
-    const laneId = swimlaneLayout.positions.get(m.id)?.laneId ?? "other";
+    const laneId = swimlaneLayout.nodePositions.get(m.id)?.laneId ?? "other";
     if (hiddenLanes.has(laneId)) return false;
     if (!showClosed && isClosedTopicMeeting(m)) return false;
     return true;
@@ -729,108 +842,150 @@ function MapInner() {
                 </label>
               </div>
 
-              {/* スイムレーン本体 */}
-              <div className="flex-1 flex overflow-hidden">
-                {/* レーンラベル(固定、横スクロールしない) */}
-                <div className="flex-shrink-0 border-r border-gray-100 bg-white">
-                  {ALL_LANES.map((lane) => (
-                    <div key={lane.id} style={{ height: LANE_HEIGHT, width: 110 }}
-                      className="flex items-center px-2 text-xs font-medium text-gray-500 border-b border-gray-50">
-                      {lane.label}
+              {/* スイムレーン本体(1つのスクロールコンテナ内でヘッダー行/ラベル列をsticky) */}
+              <div
+                ref={swimlaneScrollRef}
+                className="flex-1 relative"
+                style={{ overflow: "auto", WebkitOverflowScrolling: "touch" }}
+              >
+                <div style={{ width: LANE_LABEL_WIDTH + swimlaneLayout.width, position: "relative" }}>
+                  {/* 月の目盛り(sticky top) */}
+                  <div style={{ position: "sticky", top: 0, zIndex: 20, display: "flex", height: MONTH_HEADER_HEIGHT }}>
+                    <div style={{ position: "sticky", left: 0, width: LANE_LABEL_WIDTH, flexShrink: 0, zIndex: 22 }}
+                      className="bg-white border-b border-r border-gray-100" />
+                    <div style={{ position: "relative", flex: 1 }} className="bg-white border-b border-gray-100">
+                      {swimlaneLayout.months.map((mo, i) => (
+                        <div key={mo.key}
+                          style={{ position: "absolute", left: i * MONTH_WIDTH + 6, top: 0, height: "100%" }}
+                          className="flex items-center text-[11px] font-medium text-gray-500 whitespace-nowrap">
+                          {mo.month}月{mo.showYear ? `(${mo.year})` : ""}
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </div>
 
-                {/* タイムライン(横スクロール) */}
-                <div className="flex-1 overflow-auto relative">
-                  <div style={{ width: swimlaneLayout.width, height: ALL_LANES.length * LANE_HEIGHT, position: "relative" }}>
-                    {/* レーン区切り線 */}
-                    {ALL_LANES.map((lane, i) => (
-                      <div key={lane.id}
-                        style={{ position: "absolute", top: i * LANE_HEIGHT, left: 0, right: 0, height: LANE_HEIGHT }}
-                        className="border-b border-gray-50" />
-                    ))}
+                  {/* レーンラベル(sticky left) + タイムライン本体 */}
+                  <div style={{ display: "flex" }}>
+                    <div style={{ position: "sticky", left: 0, zIndex: 15, width: LANE_LABEL_WIDTH, flexShrink: 0 }}
+                      className="border-r border-gray-100">
+                      {ALL_LANES.map((lane) => (
+                        <div key={lane.id} style={{ height: swimlaneLayout.laneHeight, background: lane.bgColor }}
+                          className="flex items-center px-2 text-xs font-medium text-gray-600 border-b border-white/60">
+                          {lane.label}
+                        </div>
+                      ))}
+                    </div>
 
-                    {/* クロスリンク */}
-                    <svg
-                      style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
-                      width={swimlaneLayout.width}
-                      height={ALL_LANES.length * LANE_HEIGHT}
-                    >
-                      {swimlaneData.crossLinks
-                        .filter((cl) => visibleSwimlaneMeetingIds.has(cl.fromMeetingId) && visibleSwimlaneMeetingIds.has(cl.toMeetingId))
-                        .map((cl) => {
-                          const from = swimlaneLayout.positions.get(cl.fromMeetingId);
-                          const to = swimlaneLayout.positions.get(cl.toMeetingId);
-                          if (!from || !to) return null;
-                          const fromY = laneY(from.laneId);
-                          const toY = laneY(to.laneId);
-                          const count = cl.sharedTags.length || 1;
-                          const strokeWidth = count >= 3 ? 4 : count === 2 ? 2.5 : 1.5;
-                          const opacity = count >= 3 ? 0.8 : count === 2 ? 0.5 : 0.3;
-                          const sameLane = from.laneId === to.laneId;
-                          const d = sameLane
-                            ? `M ${from.x} ${fromY} L ${to.x} ${toY}`
-                            : `M ${from.x} ${fromY} C ${from.x} ${(fromY + toY) / 2}, ${to.x} ${(fromY + toY) / 2}, ${to.x} ${toY}`;
-                          return (
-                            <path key={cl.id} d={d} fill="none" stroke="#6366f1"
-                              strokeWidth={strokeWidth} opacity={opacity} style={{ pointerEvents: "stroke" }}>
-                              <title>{cl.sharedTags.join("、")}</title>
-                            </path>
-                          );
-                        })}
-                    </svg>
+                    <div style={{ position: "relative", width: swimlaneLayout.width, height: swimlaneLayout.totalHeight }}>
+                      {/* レーン背景色 */}
+                      {ALL_LANES.map((lane, i) => (
+                        <div key={lane.id}
+                          style={{ position: "absolute", top: i * swimlaneLayout.laneHeight, left: 0, right: 0, height: swimlaneLayout.laneHeight, background: lane.bgColor }} />
+                      ))}
+                      {/* レーン区切り線 */}
+                      {ALL_LANES.map((lane, i) => (
+                        <div key={`sep-${lane.id}`}
+                          style={{ position: "absolute", top: (i + 1) * swimlaneLayout.laneHeight - 1, left: 0, right: 0, height: 1 }}
+                          className="bg-white" />
+                      ))}
+                      {/* 月の区切り縦線 */}
+                      {[...swimlaneLayout.months.map((_, i) => i), swimlaneLayout.months.length].map((i) => (
+                        <div key={`month-line-${i}`}
+                          style={{ position: "absolute", left: i * MONTH_WIDTH, top: 0, bottom: 0, width: 1 }}
+                          className="bg-gray-200" />
+                      ))}
 
-                    {/* 会議ノード */}
-                    {visibleSwimlaneMeetings.map((m) => {
-                      const pos = swimlaneLayout.positions.get(m.id);
-                      if (!pos) return null;
-                      const y = laneY(pos.laneId);
-                      return (
-                        <div key={m.id} onClick={() => handleNodeClick(m.id)}
-                          style={{ position: "absolute", left: pos.x - SWIMLANE_NODE_WIDTH / 2, top: y - 24, width: SWIMLANE_NODE_WIDTH }}
-                          className="bg-white border border-indigo-200 rounded-lg shadow-sm px-2 py-1.5 cursor-pointer hover:border-indigo-400 transition-colors z-10">
-                          <p className="text-xs font-medium text-gray-800 truncate">{m.title ?? "タイトルなし"}</p>
-                          <div className="flex items-center justify-between mt-0.5">
-                            <span className="text-[10px] text-gray-400">
-                              {new Date(m.date).toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })}
-                            </span>
-                            <span className="text-[10px] bg-indigo-50 text-indigo-500 px-1 rounded">{m.nodeCount}</span>
+                      {/* クロスリンク */}
+                      <svg
+                        style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
+                        width={swimlaneLayout.width}
+                        height={swimlaneLayout.totalHeight}
+                      >
+                        {swimlaneData.crossLinks
+                          .filter((cl) => visibleSwimlaneMeetingIds.has(cl.fromMeetingId) && visibleSwimlaneMeetingIds.has(cl.toMeetingId))
+                          .map((cl) => {
+                            const from = swimlaneLayout.nodePositions.get(cl.fromMeetingId);
+                            const to = swimlaneLayout.nodePositions.get(cl.toMeetingId);
+                            if (!from || !to) return null;
+                            const count = cl.sharedTags.length || 1;
+                            const strokeWidth = count >= 3 ? 4 : count === 2 ? 2.5 : 1.5;
+                            const opacity = count >= 3 ? 0.8 : count === 2 ? 0.5 : 0.3;
+                            const sameLane = from.laneId === to.laneId;
+                            const d = sameLane
+                              ? `M ${from.x} ${from.y} L ${to.x} ${to.y}`
+                              : `M ${from.x} ${from.y} C ${from.x} ${(from.y + to.y) / 2}, ${to.x} ${(from.y + to.y) / 2}, ${to.x} ${to.y}`;
+                            return (
+                              <path key={cl.id} d={d} fill="none" stroke="#6366f1"
+                                strokeWidth={strokeWidth} opacity={opacity} style={{ pointerEvents: "stroke" }}>
+                                <title>{cl.sharedTags.join("、")}</title>
+                              </path>
+                            );
+                          })}
+                      </svg>
+
+                      {/* 会議ノード */}
+                      {visibleSwimlaneMeetings.map((m) => {
+                        const pos = swimlaneLayout.nodePositions.get(m.id);
+                        if (!pos) return null;
+                        const isFront = m.id === hoveredMeetingId || m.id === expandedMeetingId;
+                        return (
+                          <div key={m.id}
+                            onClick={() => handleNodeClick(m.id)}
+                            onMouseEnter={() => setHoveredMeetingId(m.id)}
+                            onMouseLeave={() => setHoveredMeetingId(null)}
+                            onTouchStart={() => setHoveredMeetingId(m.id)}
+                            style={{
+                              position: "absolute",
+                              left: pos.x - SWIMLANE_NODE_WIDTH / 2,
+                              top: pos.y - 20,
+                              width: SWIMLANE_NODE_WIDTH,
+                              zIndex: isFront ? 40 : 10,
+                            }}
+                            className="bg-white border border-indigo-200 rounded-lg shadow-sm px-2 py-1.5 cursor-pointer hover:border-indigo-400 hover:shadow-md transition-shadow">
+                            <p className="text-xs font-medium text-gray-800 leading-snug"
+                              style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                              {m.title ?? "タイトルなし"}
+                            </p>
+                            <div className="flex items-center justify-between mt-0.5">
+                              <span className="text-[10px] text-gray-400">
+                                {new Date(m.date).toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" })}
+                              </span>
+                              <span className="text-[10px] bg-indigo-50 text-indigo-500 px-1 rounded flex-shrink-0">{m.nodeCount}</span>
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
 
-                    {/* クリックで展開するポップオーバー */}
-                    {expandedMeetingId && (() => {
-                      const pos = swimlaneLayout.positions.get(expandedMeetingId);
-                      if (!pos) return null;
-                      const y = laneY(pos.laneId);
-                      const nodesForPopover = expandedNodesCache.get(expandedMeetingId) ?? [];
-                      return (
-                        <div
-                          style={{ position: "absolute", left: pos.x - SWIMLANE_NODE_WIDTH / 2, top: y + 28, width: 220, zIndex: 30 }}
-                          className="bg-white rounded-xl shadow-lg border border-gray-100 p-3">
-                          {expandedLoading ? (
-                            <p className="text-xs text-gray-400">読み込み中...</p>
-                          ) : (
-                            <>
-                              <ul className="space-y-1 text-xs text-gray-700 max-h-40 overflow-y-auto">
-                                {nodesForPopover.map((n) => (
-                                  <li key={n.id} className="flex items-center gap-1">
-                                    <span>{n.nodeType === "root" ? "🏠" : "⭐"}</span>
-                                    <span className="truncate">{n.label}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                              <Link href={`/meetings/${expandedMeetingId}/result`} className="text-indigo-600 text-xs underline mt-2 inline-block">
-                                詳細を見る →
-                              </Link>
-                            </>
-                          )}
-                        </div>
-                      );
-                    })()}
+                      {/* クリックで展開するポップオーバー */}
+                      {expandedMeetingId && (() => {
+                        const pos = swimlaneLayout.nodePositions.get(expandedMeetingId);
+                        if (!pos) return null;
+                        const nodesForPopover = expandedNodesCache.get(expandedMeetingId) ?? [];
+                        return (
+                          <div
+                            style={{ position: "absolute", left: pos.x - SWIMLANE_NODE_WIDTH / 2, top: pos.y + 24, width: 220, zIndex: 50 }}
+                            className="bg-white rounded-xl shadow-lg border border-gray-100 p-3">
+                            {expandedLoading ? (
+                              <p className="text-xs text-gray-400">読み込み中...</p>
+                            ) : (
+                              <>
+                                <ul className="space-y-1 text-xs text-gray-700 max-h-40 overflow-y-auto">
+                                  {nodesForPopover.map((n) => (
+                                    <li key={n.id} className="flex items-center gap-1">
+                                      <span>{n.nodeType === "root" ? "🏠" : "⭐"}</span>
+                                      <span className="truncate">{n.label}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                                <Link href={`/meetings/${expandedMeetingId}/result`} className="text-indigo-600 text-xs underline mt-2 inline-block">
+                                  詳細を見る →
+                                </Link>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
                   </div>
                 </div>
               </div>
