@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ALL_LANES, assignLane } from "@/lib/lanes";
 
@@ -98,17 +98,20 @@ interface ExpandedNode {
 }
 
 // ---- スイムレーンレイアウト定数 ----
-const BASE_LANE_HEIGHT = 70;
-const NODE_LEVEL_SPACING = 34;
-const NODE_TOP_MARGIN = 22;
-const NODE_BOTTOM_MARGIN = 14;
-const COLLISION_THRESHOLD = 150;
+const MIN_LANE_HEIGHT = 64;
+const NODE_LEVEL_SPACING = 22;
+const NODE_TOP_MARGIN = 14;
+const NODE_BOTTOM_MARGIN = 8;
+const COLLISION_THRESHOLD = 150; // 画面上でのピクセル距離。ズームで座標が伸びるほど自然に衝突が減る
 const SWIMLANE_NODE_WIDTH = 160;
 const TIMELINE_PADDING = 60;
 const MIN_TIMELINE_WIDTH = 900;
 const MONTH_WIDTH = 300;
 const MONTH_HEADER_HEIGHT = 32;
 const LANE_LABEL_WIDTH = 112;
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 3;
+const ZOOM_SEMANTIC_THRESHOLD = 1.5;
 
 interface MonthTick {
   key: string;
@@ -142,9 +145,10 @@ function buildMonthRange(meetings: OverviewMeeting[]): MonthTick[] {
   return months;
 }
 
-// 同レーン内でX座標が近いノードを検出し、重ならないよう縦方向のレベルを割り当てる
-// (レベル数に上限は設けず、最も密集したレーンに合わせてレーン高さを後で拡張する)
-function resolveCollisionLevels(items: { id: string; x: number }[]): Map<string, number> {
+// 同レーン内でX座標が近いノードを検出し、重ならないよう縦方向のレベルを割り当てる。
+// levelCountを超える分は最後のレベルに丸める(縦は固定高さなので無限には増やせない。
+// ズームアウト時に重なりが残るのは許容し、ズームインでX間隔が広がるほど自然に解消される)
+function resolveCollisionLevels(items: { id: string; x: number }[], levelCount: number): Map<string, number> {
   const sorted = [...items].sort((a, b) => a.x - b.x);
   const placed: { x: number; level: number }[] = [];
   const result = new Map<string, number>();
@@ -153,7 +157,7 @@ function resolveCollisionLevels(items: { id: string; x: number }[]): Map<string,
       placed.filter((p) => Math.abs(p.x - item.x) < COLLISION_THRESHOLD).map((p) => p.level)
     );
     let level = 0;
-    while (usedLevels.has(level)) level++;
+    while (usedLevels.has(level) && level < levelCount - 1) level++;
     result.set(item.id, level);
     placed.push({ x: item.x, level });
   });
@@ -165,16 +169,23 @@ interface SwimlaneLayout {
   width: number;
   laneHeight: number;
   totalHeight: number;
+  monthWidth: number;
+  padding: number;
   nodePositions: Map<string, { x: number; y: number; laneId: string }>;
 }
 
-function computeSwimlaneLayout(meetings: OverviewMeeting[]): SwimlaneLayout {
+// laneHeightは画面の高さから決まる固定値として外から渡す(縦スクロールを出さないため)。
+// zoomはX方向(月の幅)にのみ効かせる。
+function computeSwimlaneLayout(meetings: OverviewMeeting[], zoom: number, laneHeight: number): SwimlaneLayout {
   const months = buildMonthRange(meetings);
+  const totalHeight = laneHeight * ALL_LANES.length;
+  const monthWidth = MONTH_WIDTH * zoom;
+  const padding = TIMELINE_PADDING * zoom;
   if (months.length === 0) {
-    return { months, width: MIN_TIMELINE_WIDTH, laneHeight: BASE_LANE_HEIGHT, totalHeight: BASE_LANE_HEIGHT * ALL_LANES.length, nodePositions: new Map() };
+    return { months, width: MIN_TIMELINE_WIDTH * zoom, laneHeight, totalHeight, monthWidth, padding, nodePositions: new Map() };
   }
 
-  const width = Math.max(MIN_TIMELINE_WIDTH, months.length * MONTH_WIDTH) + TIMELINE_PADDING * 2;
+  const width = Math.max(MIN_TIMELINE_WIDTH * zoom, months.length * monthWidth) + padding * 2;
 
   // 月ごとにグループ化し、月内は等幅で日付順に配置(密集期間の詰まりすぎ・閑散期間の間延びを防ぐ)
   const byMonth = new Map<string, OverviewMeeting[]>();
@@ -189,43 +200,32 @@ function computeSwimlaneLayout(meetings: OverviewMeeting[]): SwimlaneLayout {
     const monthMeetings = (byMonth.get(monthInfo.key) ?? [])
       .slice()
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-    const monthStartX = TIMELINE_PADDING + monthIdx * MONTH_WIDTH;
+    const monthStartX = padding + monthIdx * monthWidth;
     const count = monthMeetings.length;
     monthMeetings.forEach((m, i) => {
       const fraction = count === 1 ? 0.5 : (i + 0.5) / count;
-      const x = monthStartX + fraction * MONTH_WIDTH;
+      const x = monthStartX + fraction * monthWidth;
       const laneId = assignLane(m.tags.map((tag) => tag.name));
       if (!baseByLane.has(laneId)) baseByLane.set(laneId, []);
       baseByLane.get(laneId)!.push({ id: m.id, x });
     });
   });
 
-  // レーンごとに衝突レベルを解決し、全レーン中の最大レベルからレーン高さを決定
-  const levelsByLane = new Map<string, Map<string, number>>();
-  let maxLevel = 0;
-  baseByLane.forEach((items, laneId) => {
-    const levels = resolveCollisionLevels(items);
-    levelsByLane.set(laneId, levels);
-    levels.forEach((level) => { if (level > maxLevel) maxLevel = level; });
-  });
-
-  const laneHeight = Math.max(
-    BASE_LANE_HEIGHT,
-    NODE_TOP_MARGIN + (maxLevel + 1) * NODE_LEVEL_SPACING + NODE_BOTTOM_MARGIN
-  );
+  // レーンの固定高さに収まる最大レベル数を求め、その範囲内で衝突を解決する
+  const maxLevelsFit = Math.max(1, Math.floor((laneHeight - NODE_TOP_MARGIN - NODE_BOTTOM_MARGIN) / NODE_LEVEL_SPACING));
 
   const nodePositions = new Map<string, { x: number; y: number; laneId: string }>();
   baseByLane.forEach((items, laneId) => {
     const laneIdx = ALL_LANES.findIndex((l) => l.id === laneId);
     const top = (laneIdx === -1 ? ALL_LANES.length - 1 : laneIdx) * laneHeight;
-    const levels = levelsByLane.get(laneId)!;
+    const levels = resolveCollisionLevels(items, maxLevelsFit);
     items.forEach((item) => {
       const level = levels.get(item.id) ?? 0;
       nodePositions.set(item.id, { x: item.x, y: top + NODE_TOP_MARGIN + level * NODE_LEVEL_SPACING, laneId });
     });
   });
 
-  return { months, width, laneHeight, totalHeight: laneHeight * ALL_LANES.length, nodePositions };
+  return { months, width, laneHeight, totalHeight, monthWidth, padding, nodePositions };
 }
 
 function isClosedTopicMeeting(m: OverviewMeeting): boolean {
@@ -413,22 +413,143 @@ function MapInner() {
   const [expandedNodesCache, setExpandedNodesCache] = useState<Map<string, ExpandedNode[]>>(new Map());
   const [expandedLoading, setExpandedLoading] = useState(false);
   const [hoveredMeetingId, setHoveredMeetingId] = useState<string | null>(null);
+  const [zoom, setZoomState] = useState(1);
+  const [availableHeight, setAvailableHeight] = useState(0);
 
   const swimlaneScrollRef = useRef<HTMLDivElement>(null);
   const hasScrolledInitially = useRef(false);
+  const zoomRef = useRef(1);
 
-  const swimlaneLayout = useMemo(() => computeSwimlaneLayout(swimlaneData.meetings), [swimlaneData.meetings]);
+  function setZoom(z: number) {
+    zoomRef.current = z;
+    setZoomState(z);
+  }
 
-  // スマホでは最新の会議が見えるよう初期表示位置を右端にする
+  const laneHeight = Math.max(
+    MIN_LANE_HEIGHT,
+    Math.floor((availableHeight - MONTH_HEADER_HEIGHT) / ALL_LANES.length)
+  );
+
+  const swimlaneLayout = useMemo(
+    () => computeSwimlaneLayout(swimlaneData.meetings, zoom, laneHeight),
+    [swimlaneData.meetings, zoom, laneHeight]
+  );
+
+  // スイムレーン領域の実測高さを取得(レーン高さ = 画面の高さ ÷ レーン数、に使う)
+  useEffect(() => {
+    const el = swimlaneScrollRef.current;
+    if (!el) return;
+    function measure() {
+      if (el) setAvailableHeight(el.clientHeight);
+    }
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  function scrollToInitialPosition() {
+    if (!swimlaneScrollRef.current) return;
+    if (window.innerWidth < 640) {
+      // スマホでは最新の会議が見えるよう初期表示位置を右端にする
+      swimlaneScrollRef.current.scrollLeft = swimlaneScrollRef.current.scrollWidth;
+    } else {
+      swimlaneScrollRef.current.scrollLeft = 0;
+    }
+  }
+
   useEffect(() => {
     if (hasScrolledInitially.current) return;
     if (swimlaneLoading || swimlaneData.meetings.length === 0) return;
     if (!swimlaneScrollRef.current) return;
-    if (window.innerWidth < 640) {
-      swimlaneScrollRef.current.scrollLeft = swimlaneScrollRef.current.scrollWidth;
-    }
+    scrollToInitialPosition();
     hasScrolledInitially.current = true;
   }, [swimlaneLoading, swimlaneData.meetings.length]);
+
+  // カーソル/ピンチ中心を基準にズームする。中心のワールド座標を保ったままscrollLeftを調整する
+  const applyZoom = useCallback((newZoomRaw: number, clientX?: number) => {
+    const newZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, newZoomRaw));
+    const container = swimlaneScrollRef.current;
+    if (!container) {
+      setZoom(newZoom);
+      return;
+    }
+    const rect = container.getBoundingClientRect();
+    const cursorX = clientX !== undefined ? clientX - rect.left : rect.width / 2;
+    const contentXOld = container.scrollLeft + cursorX;
+    const timelineXOld = contentXOld - LANE_LABEL_WIDTH;
+    const worldX = timelineXOld / zoomRef.current;
+    const timelineXNew = worldX * newZoom;
+    const newScrollLeft = LANE_LABEL_WIDTH + timelineXNew - cursorX;
+    setZoom(newZoom);
+    requestAnimationFrame(() => {
+      if (swimlaneScrollRef.current) {
+        swimlaneScrollRef.current.scrollLeft = Math.max(0, newScrollLeft);
+      }
+    });
+  }, []);
+
+  function resetZoom() {
+    setZoom(1);
+    hasScrolledInitially.current = false;
+    requestAnimationFrame(() => {
+      scrollToInitialPosition();
+      hasScrolledInitially.current = true;
+    });
+  }
+
+  // ホイール(縦方向優勢)とピンチでズーム。横方向優勢なホイールは通常のスクロールに任せる
+  useEffect(() => {
+    const el = swimlaneScrollRef.current;
+    if (!el) return;
+
+    function onWheel(e: WheelEvent) {
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      e.preventDefault();
+      const factor = Math.exp(-e.deltaY * 0.0015);
+      applyZoom(zoomRef.current * factor, e.clientX);
+    }
+
+    function touchDist(touches: TouchList) {
+      const [a, b] = [touches[0], touches[1]];
+      return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    }
+    function touchMidX(touches: TouchList) {
+      const [a, b] = [touches[0], touches[1]];
+      return (a.clientX + b.clientX) / 2;
+    }
+
+    let pinchStartDist: number | null = null;
+    let pinchStartZoom = 1;
+
+    function onTouchStart(e: TouchEvent) {
+      if (e.touches.length === 2) {
+        pinchStartDist = touchDist(e.touches);
+        pinchStartZoom = zoomRef.current;
+      }
+    }
+    function onTouchMove(e: TouchEvent) {
+      if (e.touches.length === 2 && pinchStartDist) {
+        e.preventDefault();
+        const scale = touchDist(e.touches) / pinchStartDist;
+        applyZoom(pinchStartZoom * scale, touchMidX(e.touches));
+      }
+    }
+    function onTouchEnd(e: TouchEvent) {
+      if (e.touches.length < 2) pinchStartDist = null;
+    }
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("touchstart", onTouchStart, { passive: false });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+    };
+  }, [applyZoom]);
 
   /* ===== LEGACY: React Flowツリー表示専用の状態(未使用、参照用に保持) =====
   const router = useRouter();
@@ -856,7 +977,7 @@ function MapInner() {
                     <div style={{ position: "relative", flex: 1 }} className="bg-white border-b border-gray-100">
                       {swimlaneLayout.months.map((mo, i) => (
                         <div key={mo.key}
-                          style={{ position: "absolute", left: i * MONTH_WIDTH + 6, top: 0, height: "100%" }}
+                          style={{ position: "absolute", left: swimlaneLayout.padding + i * swimlaneLayout.monthWidth + 6, top: 0, height: "100%" }}
                           className="flex items-center text-[11px] font-medium text-gray-500 whitespace-nowrap">
                           {mo.month}月{mo.showYear ? `(${mo.year})` : ""}
                         </div>
@@ -891,7 +1012,7 @@ function MapInner() {
                       {/* 月の区切り縦線 */}
                       {[...swimlaneLayout.months.map((_, i) => i), swimlaneLayout.months.length].map((i) => (
                         <div key={`month-line-${i}`}
-                          style={{ position: "absolute", left: i * MONTH_WIDTH, top: 0, bottom: 0, width: 1 }}
+                          style={{ position: "absolute", left: swimlaneLayout.padding + i * swimlaneLayout.monthWidth, top: 0, bottom: 0, width: 1 }}
                           className="bg-gray-200" />
                       ))}
 
@@ -943,7 +1064,12 @@ function MapInner() {
                             }}
                             className="bg-white border border-indigo-200 rounded-lg shadow-sm px-2 py-1.5 cursor-pointer hover:border-indigo-400 hover:shadow-md transition-shadow">
                             <p className="text-xs font-medium text-gray-800 leading-snug"
-                              style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                              style={{
+                                display: "-webkit-box",
+                                WebkitLineClamp: zoom >= ZOOM_SEMANTIC_THRESHOLD ? 4 : 2,
+                                WebkitBoxOrient: "vertical",
+                                overflow: "hidden",
+                              }}>
                               {m.title ?? "タイトルなし"}
                             </p>
                             <div className="flex items-center justify-between mt-0.5">
@@ -988,6 +1114,22 @@ function MapInner() {
                     </div>
                   </div>
                 </div>
+              </div>
+
+              {/* ズームUI(スマホで片手操作できるよう右下に配置) */}
+              <div className="absolute bottom-4 right-4 z-50 flex flex-col gap-1 bg-white rounded-xl shadow-lg border border-gray-100 p-1">
+                <button onClick={() => applyZoom(zoomRef.current + 0.25)}
+                  className="w-8 h-8 flex items-center justify-center text-gray-600 hover:bg-gray-50 rounded-lg text-base font-medium">
+                  ＋
+                </button>
+                <button onClick={() => applyZoom(zoomRef.current - 0.25)}
+                  className="w-8 h-8 flex items-center justify-center text-gray-600 hover:bg-gray-50 rounded-lg text-base font-medium">
+                  −
+                </button>
+                <button onClick={resetZoom}
+                  className="w-8 h-8 flex items-center justify-center text-gray-400 hover:bg-gray-50 rounded-lg text-[10px] font-medium">
+                  リセット
+                </button>
               </div>
             </>
           )}
