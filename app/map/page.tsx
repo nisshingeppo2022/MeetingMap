@@ -99,18 +99,21 @@ interface ExpandedNode {
 
 // ---- スイムレーンレイアウト定数 ----
 const MIN_LANE_HEIGHT = 64;
-const NODE_LEVEL_SPACING = 22;
-const NODE_TOP_MARGIN = 14;
-const NODE_BOTTOM_MARGIN = 8;
-const COLLISION_THRESHOLD = 150; // 画面上でのピクセル距離。ズームで座標が伸びるほど自然に衝突が減る
+const NODE_HEIGHT_COMPACT = 36; // ズームアウト時(タイトル1行)のノード実高さ
+const NODE_HEIGHT_FULL = 70; // ズームイン時(タイトル最大3行)のノード実高さ
+const NODE_TITLE_LINES_FULL = 3;
+const NODE_TOP_MARGIN = 12;
+const NODE_BOTTOM_MARGIN = 6;
+const MAX_LEVELS_HARD_CAP = 12;
 const SWIMLANE_NODE_WIDTH = 160;
+const COLLISION_THRESHOLD = SWIMLANE_NODE_WIDTH; // ノード幅そのもの。これ未満の距離なら箱が物理的に重なる
 const TIMELINE_PADDING = 60;
 const MIN_TIMELINE_WIDTH = 900;
 const MONTH_WIDTH = 300;
 const MONTH_HEADER_HEIGHT = 32;
 const LANE_LABEL_WIDTH = 112;
 const ZOOM_MIN = 0.5;
-const ZOOM_MAX = 3;
+const ZOOM_MAX = 6;
 const ZOOM_SEMANTIC_THRESHOLD = 1.5;
 
 interface MonthTick {
@@ -146,9 +149,9 @@ function buildMonthRange(meetings: OverviewMeeting[]): MonthTick[] {
 }
 
 // 同レーン内でX座標が近いノードを検出し、重ならないよう縦方向のレベルを割り当てる。
-// levelCountを超える分は最後のレベルに丸める(縦は固定高さなので無限には増やせない。
-// ズームアウト時に重なりが残るのは許容し、ズームインでX間隔が広がるほど自然に解消される)
-function resolveCollisionLevels(items: { id: string; x: number }[], levelCount: number): Map<string, number> {
+// レベル数はハードキャップまで無制限(実際に必要な数だけ使う)。
+// ズームでX間隔が広がるほど衝突するアイテムが減り、必要レベル数は自然に減っていく
+function resolveCollisionLevels(items: { id: string; x: number }[]): Map<string, number> {
   const sorted = [...items].sort((a, b) => a.x - b.x);
   const placed: { x: number; level: number }[] = [];
   const result = new Map<string, number>();
@@ -157,7 +160,7 @@ function resolveCollisionLevels(items: { id: string; x: number }[], levelCount: 
       placed.filter((p) => Math.abs(p.x - item.x) < COLLISION_THRESHOLD).map((p) => p.level)
     );
     let level = 0;
-    while (usedLevels.has(level) && level < levelCount - 1) level++;
+    while (usedLevels.has(level) && level < MAX_LEVELS_HARD_CAP - 1) level++;
     result.set(item.id, level);
     placed.push({ x: item.x, level });
   });
@@ -211,17 +214,22 @@ function computeSwimlaneLayout(meetings: OverviewMeeting[], zoom: number, laneHe
     });
   });
 
-  // レーンの固定高さに収まる最大レベル数を求め、その範囲内で衝突を解決する
-  const maxLevelsFit = Math.max(1, Math.floor((laneHeight - NODE_TOP_MARGIN - NODE_BOTTOM_MARGIN) / NODE_LEVEL_SPACING));
-
+  // レーンごとに実際に必要なレベル数を求め、固定の利用可能高さをそのレベル数で
+  // 均等分割する(必要レベルが少ないほど間隔が広がり、多いほど詰まるが高さは超えない)。
+  // 間隔の下限はノードの実高さ(ズームで表示行数が変わる)とし、レベルが違えば
+  // 縦方向も確実に離れるようにする(=箱として重ならないことを保証する)
+  const usableHeight = Math.max(1, laneHeight - NODE_TOP_MARGIN - NODE_BOTTOM_MARGIN);
+  const minSpacing = zoom >= ZOOM_SEMANTIC_THRESHOLD ? NODE_HEIGHT_FULL : NODE_HEIGHT_COMPACT;
   const nodePositions = new Map<string, { x: number; y: number; laneId: string }>();
   baseByLane.forEach((items, laneId) => {
     const laneIdx = ALL_LANES.findIndex((l) => l.id === laneId);
     const top = (laneIdx === -1 ? ALL_LANES.length - 1 : laneIdx) * laneHeight;
-    const levels = resolveCollisionLevels(items, maxLevelsFit);
+    const levels = resolveCollisionLevels(items);
+    const neededLevels = Math.max(...Array.from(levels.values())) + 1;
+    const spacing = Math.max(minSpacing, usableHeight / neededLevels);
     items.forEach((item) => {
       const level = levels.get(item.id) ?? 0;
-      nodePositions.set(item.id, { x: item.x, y: top + NODE_TOP_MARGIN + level * NODE_LEVEL_SPACING, laneId });
+      nodePositions.set(item.id, { x: item.x, y: top + NODE_TOP_MARGIN + level * spacing, laneId });
     });
   });
 
@@ -435,7 +443,8 @@ function MapInner() {
     [swimlaneData.meetings, zoom, laneHeight]
   );
 
-  // スイムレーン領域の実測高さを取得(レーン高さ = 画面の高さ ÷ レーン数、に使う)
+  // スイムレーン領域の実測高さを取得(レーン高さ = 画面の高さ ÷ レーン数、に使う)。
+  // リサイズ・画面回転でも再計算する
   useEffect(() => {
     const el = swimlaneScrollRef.current;
     if (!el) return;
@@ -445,7 +454,13 @@ function MapInner() {
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
-    return () => observer.disconnect();
+    window.addEventListener("resize", measure);
+    window.addEventListener("orientationchange", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("orientationchange", measure);
+    };
   }, []);
 
   function scrollToInitialPosition() {
@@ -877,7 +892,7 @@ function MapInner() {
   const acceptedCount = crossLinks.filter((cl) => cl.isAccepted === true).length;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: "#f9fafb" }}>
+    <div className="h-viewport" style={{ display: "flex", flexDirection: "column", background: "#f9fafb" }}>
       {/* ヘッダー */}
       <header className="bg-white border-b border-gray-100 px-4 py-3 z-10 flex-shrink-0">
         <div className="max-w-5xl mx-auto flex items-center gap-3">
@@ -967,7 +982,7 @@ function MapInner() {
               <div
                 ref={swimlaneScrollRef}
                 className="flex-1 relative"
-                style={{ overflow: "auto", WebkitOverflowScrolling: "touch" }}
+                style={{ overflow: "auto", WebkitOverflowScrolling: "touch", touchAction: "pan-x pan-y" }}
               >
                 <div style={{ width: LANE_LABEL_WIDTH + swimlaneLayout.width, position: "relative" }}>
                   {/* 月の目盛り(sticky top) */}
@@ -1058,15 +1073,15 @@ function MapInner() {
                             style={{
                               position: "absolute",
                               left: pos.x - SWIMLANE_NODE_WIDTH / 2,
-                              top: pos.y - 20,
+                              top: pos.y,
                               width: SWIMLANE_NODE_WIDTH,
                               zIndex: isFront ? 40 : 10,
                             }}
-                            className="bg-white border border-indigo-200 rounded-lg shadow-sm px-2 py-1.5 cursor-pointer hover:border-indigo-400 hover:shadow-md transition-shadow">
-                            <p className="text-xs font-medium text-gray-800 leading-snug"
+                            className="bg-white border border-indigo-200 rounded-lg shadow-sm px-1.5 py-1 cursor-pointer hover:border-indigo-400 hover:shadow-md transition-shadow">
+                            <p className="text-xs font-medium text-gray-800 leading-tight"
                               style={{
                                 display: "-webkit-box",
-                                WebkitLineClamp: zoom >= ZOOM_SEMANTIC_THRESHOLD ? 4 : 2,
+                                WebkitLineClamp: zoom >= ZOOM_SEMANTIC_THRESHOLD ? NODE_TITLE_LINES_FULL : 1,
                                 WebkitBoxOrient: "vertical",
                                 overflow: "hidden",
                               }}>
@@ -1089,7 +1104,7 @@ function MapInner() {
                         const nodesForPopover = expandedNodesCache.get(expandedMeetingId) ?? [];
                         return (
                           <div
-                            style={{ position: "absolute", left: pos.x - SWIMLANE_NODE_WIDTH / 2, top: pos.y + 24, width: 220, zIndex: 50 }}
+                            style={{ position: "absolute", left: pos.x - SWIMLANE_NODE_WIDTH / 2, top: pos.y + 36, width: 220, zIndex: 50 }}
                             className="bg-white rounded-xl shadow-lg border border-gray-100 p-3">
                             {expandedLoading ? (
                               <p className="text-xs text-gray-400">読み込み中...</p>
@@ -1116,18 +1131,18 @@ function MapInner() {
                 </div>
               </div>
 
-              {/* ズームUI(スマホで片手操作できるよう右下に配置) */}
-              <div className="absolute bottom-4 right-4 z-50 flex flex-col gap-1 bg-white rounded-xl shadow-lg border border-gray-100 p-1">
+              {/* ズームUI: マップ上に浮かせるだけのオーバーレイ。レーンの高さ計算には一切関与しない */}
+              <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-0.5 bg-white/70 backdrop-blur-sm rounded-xl shadow-md border border-gray-100 p-1 pointer-events-auto">
                 <button onClick={() => applyZoom(zoomRef.current + 0.25)}
-                  className="w-8 h-8 flex items-center justify-center text-gray-600 hover:bg-gray-50 rounded-lg text-base font-medium">
+                  className="w-7 h-7 flex items-center justify-center text-gray-600 hover:bg-gray-100/80 rounded-lg text-sm font-medium">
                   ＋
                 </button>
                 <button onClick={() => applyZoom(zoomRef.current - 0.25)}
-                  className="w-8 h-8 flex items-center justify-center text-gray-600 hover:bg-gray-50 rounded-lg text-base font-medium">
+                  className="w-7 h-7 flex items-center justify-center text-gray-600 hover:bg-gray-100/80 rounded-lg text-sm font-medium">
                   −
                 </button>
                 <button onClick={resetZoom}
-                  className="w-8 h-8 flex items-center justify-center text-gray-400 hover:bg-gray-50 rounded-lg text-[10px] font-medium">
+                  className="w-7 h-7 flex items-center justify-center text-gray-400 hover:bg-gray-100/80 rounded-lg text-[9px] font-medium">
                   リセット
                 </button>
               </div>
