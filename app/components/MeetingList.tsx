@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+
+const PAGE_SIZE = 20;
 
 interface Meeting {
   id: string;
@@ -33,6 +35,38 @@ export default function MeetingList({ initialMeetings }: { initialMeetings: Meet
   const [selectMode, setSelectMode] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [search, setSearch] = useState("");
+  const [hasMore, setHasMore] = useState(initialMeetings.length === PAGE_SIZE);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  async function loadMore() {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const res = await fetch(`/api/meetings?offset=${meetings.length}&limit=${PAGE_SIZE}`);
+      if (res.ok) {
+        const next: Meeting[] = await res.json();
+        setMeetings((prev) => [...prev, ...next]);
+        setHasMore(next.length === PAGE_SIZE);
+      }
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) loadMore();
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meetings.length, hasMore, loadingMore]);
 
   function toggleSelect(id: string) {
     setSelected((prev) => {
@@ -181,6 +215,12 @@ export default function MeetingList({ initialMeetings }: { initialMeetings: Meet
             </Link>
           );
         })}
+
+        {hasMore && (
+          <div ref={sentinelRef} className="text-center text-gray-300 text-xs py-4">
+            {loadingMore ? "読み込み中..." : ""}
+          </div>
+        )}
       </div>
     </div>
   );

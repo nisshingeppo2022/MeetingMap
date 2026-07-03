@@ -28,6 +28,9 @@ export default function NewMeetingPage() {
   const [showContactList, setShowContactList] = useState(false);
   const [agenda, setAgenda] = useState("");
   const [creating, setCreating] = useState(false);
+  const [showNewContactForm, setShowNewContactForm] = useState(false);
+  const [newContactForm, setNewContactForm] = useState({ name: "", organization: "", position: "", email: "", phone: "" });
+  const [savingNewContact, setSavingNewContact] = useState(false);
 
   useEffect(() => {
     fetch(`/api/contacts?q=${encodeURIComponent(query)}`)
@@ -41,6 +44,24 @@ export default function NewMeetingPage() {
         ? prev.filter((x) => x.id !== c.id)
         : [...prev, c]
     );
+  }
+
+  async function handleCreateContact(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingNewContact(true);
+    const res = await fetch("/api/contacts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(newContactForm),
+    });
+    if (res.ok) {
+      const created: Contact = await res.json();
+      setContacts((prev) => [created, ...prev]);
+      setSelectedContacts((prev) => [...prev, created]);
+      setNewContactForm({ name: "", organization: "", position: "", email: "", phone: "" });
+      setShowNewContactForm(false);
+    }
+    setSavingNewContact(false);
   }
 
   async function handleStart() {
@@ -171,80 +192,129 @@ export default function NewMeetingPage() {
           <div className="bg-white rounded-2xl w-full max-w-md shadow-xl flex flex-col max-h-[80vh]">
             <div className="p-4 border-b border-gray-100">
               <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h2 className="font-semibold text-gray-800">参加者を選ぶ</h2>
-                  <p className="text-xs text-gray-400 mt-0.5">複数選択できます</p>
+                <div className="flex items-center gap-2">
+                  {showNewContactForm && (
+                    <button
+                      onClick={() => setShowNewContactForm(false)}
+                      className="text-gray-400 hover:text-gray-600"
+                    >
+                      ←
+                    </button>
+                  )}
+                  <div>
+                    <h2 className="font-semibold text-gray-800">
+                      {showNewContactForm ? "新しい連絡先" : "参加者を選ぶ"}
+                    </h2>
+                    {!showNewContactForm && (
+                      <p className="text-xs text-gray-400 mt-0.5">複数選択できます</p>
+                    )}
+                  </div>
                 </div>
                 <button
-                  onClick={() => { setShowContactList(false); setQuery(""); }}
+                  onClick={() => { setShowContactList(false); setShowNewContactForm(false); setQuery(""); }}
                   className="text-gray-400 hover:text-gray-600"
                 >
                   ✕
                 </button>
               </div>
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="名前・組織で検索..."
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                autoFocus
-              />
+              {!showNewContactForm && (
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="名前・組織で検索..."
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  autoFocus
+                />
+              )}
             </div>
 
-            <div className="overflow-y-auto flex-1 p-2">
-              {contacts.length === 0 ? (
-                <p className="text-center text-gray-400 text-sm py-8">連絡先がありません</p>
-              ) : (
-                contacts.map((c) => {
-                  const isSelected = selectedContacts.some((x) => x.id === c.id);
-                  return (
-                    <button
-                      key={c.id}
-                      onClick={() => toggleContact(c)}
-                      className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors text-left ${
-                        isSelected ? "bg-indigo-50" : "hover:bg-gray-50"
-                      }`}
-                    >
-                      <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0 ${
-                        isSelected ? "bg-indigo-500 text-white" : "bg-indigo-100 text-indigo-600"
-                      }`}>
-                        {isSelected ? "✓" : c.name[0]}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className={`font-medium text-sm ${isSelected ? "text-indigo-700" : "text-gray-800"}`}>
-                          {c.name}
-                        </p>
-                        {c.organization && (
-                          <p className="text-xs text-gray-400 truncate">{c.organization}</p>
+            {showNewContactForm ? (
+              <form onSubmit={handleCreateContact} className="overflow-y-auto flex-1 p-4 space-y-3">
+                {[
+                  { key: "name", label: "名前 *", placeholder: "山田 太郎", required: true },
+                  { key: "organization", label: "組織・会社", placeholder: "株式会社〇〇", required: false },
+                  { key: "position", label: "役職", placeholder: "部長", required: false },
+                  { key: "email", label: "メール", placeholder: "taro@example.com", required: false },
+                  { key: "phone", label: "電話番号", placeholder: "090-0000-0000", required: false },
+                ].map(({ key, label, placeholder, required }) => (
+                  <div key={key}>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
+                    <input
+                      type="text"
+                      value={newContactForm[key as keyof typeof newContactForm]}
+                      onChange={(e) => setNewContactForm({ ...newContactForm, [key]: e.target.value })}
+                      placeholder={placeholder}
+                      required={required}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    />
+                  </div>
+                ))}
+                <button
+                  type="submit"
+                  disabled={savingNewContact}
+                  className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  {savingNewContact ? "保存中..." : "保存して参加者に追加"}
+                </button>
+              </form>
+            ) : (
+              <div className="overflow-y-auto flex-1 p-2">
+                {contacts.length === 0 ? (
+                  <p className="text-center text-gray-400 text-sm py-8">連絡先がありません</p>
+                ) : (
+                  contacts.map((c) => {
+                    const isSelected = selectedContacts.some((x) => x.id === c.id);
+                    return (
+                      <button
+                        key={c.id}
+                        onClick={() => toggleContact(c)}
+                        className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-colors text-left ${
+                          isSelected ? "bg-indigo-50" : "hover:bg-gray-50"
+                        }`}
+                      >
+                        <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0 ${
+                          isSelected ? "bg-indigo-500 text-white" : "bg-indigo-100 text-indigo-600"
+                        }`}>
+                          {isSelected ? "✓" : c.name[0]}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className={`font-medium text-sm ${isSelected ? "text-indigo-700" : "text-gray-800"}`}>
+                            {c.name}
+                          </p>
+                          {c.organization && (
+                            <p className="text-xs text-gray-400 truncate">{c.organization}</p>
+                          )}
+                        </div>
+                        {isSelected && (
+                          <span className="text-indigo-500 text-xs font-medium">選択済み</span>
                         )}
-                      </div>
-                      {isSelected && (
-                        <span className="text-indigo-500 text-xs font-medium">選択済み</span>
-                      )}
-                    </button>
-                  );
-                })
-              )}
-              <Link
-                href="/contacts"
-                className="flex items-center gap-2 px-3 py-3 text-sm text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors"
-              >
-                <span>＋</span> 新しい連絡先を追加
-              </Link>
-            </div>
+                      </button>
+                    );
+                  })
+                )}
+                <button
+                  onClick={() => setShowNewContactForm(true)}
+                  className="w-full flex items-center gap-2 px-3 py-3 text-sm text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors text-left"
+                >
+                  <span>＋</span> 新しい連絡先を追加
+                </button>
+              </div>
+            )}
 
             {/* 確定ボタン */}
-            <div className="p-4 border-t border-gray-100">
-              <button
-                onClick={() => { setShowContactList(false); setQuery(""); }}
-                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-xl text-sm transition-colors"
-              >
-                {selectedContacts.length > 0
-                  ? `${selectedContacts.length}名を選択して確定`
-                  : "選択せずに閉じる"}
-              </button>
-            </div>
+            {!showNewContactForm && (
+              <div className="p-4 border-t border-gray-100">
+                <button
+                  onClick={() => { setShowContactList(false); setQuery(""); }}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-xl text-sm transition-colors"
+                >
+                  {selectedContacts.length > 0
+                    ? `${selectedContacts.length}名を選択して確定`
+                    : "選択せずに閉じる"}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

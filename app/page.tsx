@@ -55,10 +55,10 @@ export default async function HomePage() {
             <p className="text-2xl font-bold text-indigo-600">{meetings.length}</p>
             <p className="text-xs text-gray-400 mt-0.5">ミーティング</p>
           </div>
-          <div className="bg-white rounded-xl border border-gray-100 p-3 shadow-sm text-center">
+          <Link href="/contacts" className="bg-white rounded-xl border border-gray-100 p-3 shadow-sm text-center hover:border-indigo-300 transition-colors">
             <p className="text-2xl font-bold text-indigo-600">{contactCount}</p>
-            <p className="text-xs text-gray-400 mt-0.5">連絡先</p>
-          </div>
+            <p className="text-xs text-gray-400 mt-0.5">連絡先 ›</p>
+          </Link>
           <Link href="/actions" className="bg-white rounded-xl border border-gray-100 p-3 shadow-sm text-center hover:border-amber-300 transition-colors">
             <p className={`text-2xl font-bold ${pendingActions > 0 ? "text-amber-500" : "text-gray-300"}`}>
               {pendingActions}

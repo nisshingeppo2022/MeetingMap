@@ -9,6 +9,7 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const limit = parseInt(searchParams.get("limit") ?? "20");
+  const offset = parseInt(searchParams.get("offset") ?? "0");
   const contactId = searchParams.get("contactId");
   const allNodes = searchParams.get("allNodes") === "true";
 
@@ -24,6 +25,7 @@ export async function GET(request: NextRequest) {
     },
     orderBy: { createdAt: "desc" },
     take: limit,
+    skip: offset,
     include: {
       contact: { select: { id: true, name: true, organization: true } },
       meetingContacts: { include: { contact: { select: { id: true, name: true, organization: true } } } },
