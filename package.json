@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "test": "vitest run",
-    "sync": "node scripts/sync-obsidian.mjs"
+    "sync": "node scripts/sync-obsidian.mjs",
+    "rebuild-digest": "node scripts/rebuild-digest.mjs"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

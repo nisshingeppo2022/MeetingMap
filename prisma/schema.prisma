@@ -259,6 +259,7 @@ model CaptureTagDef {
   label       String
   description String?
   active      Boolean  @default(true)
+  isProject   Boolean  @default(false) @map("is_project")
   sortOrder   Int      @default(100) @map("sort_order")
   createdAt   DateTime @default(now()) @map("created_at")
 

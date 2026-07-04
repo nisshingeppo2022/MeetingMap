@@ -9,6 +9,7 @@ import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
 import { createClient } from "@supabase/supabase-js";
+import { appendToDigest } from "./lib/obsidian-projects.mjs";
 
 dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
 
@@ -74,6 +75,16 @@ async function main() {
     process.exit(1);
   }
 
+  const { data: projectTagDefs, error: tagDefsError } = await supabase
+    .from("capture_tag_defs")
+    .select("slug, label")
+    .eq("is_project", true);
+  if (tagDefsError) {
+    console.error("capture_tag_defs取得エラー:", tagDefsError.message);
+    process.exit(1);
+  }
+  const projectLabelBySlug = new Map((projectTagDefs ?? []).map((t) => [t.slug, t.label]));
+
   const { data: captures, error } = await supabase
     .from("captures")
     .select("*")
@@ -93,6 +104,7 @@ async function main() {
   let written = 0;
   let skipped = 0;
   let failed = 0;
+  let digestAppended = 0;
 
   for (const capture of captures) {
     const { dir, filePath } = filePathFor(capture);
@@ -107,6 +119,14 @@ async function main() {
         written++;
       }
 
+      // プロジェクトタグが付いている場合は、対応するプロジェクトのダイジェストにも追記する
+      for (const tag of capture.tags) {
+        if (projectLabelBySlug.has(tag)) {
+          appendToDigest(VAULT_PATH, tag, projectLabelBySlug.get(tag), capture);
+          digestAppended++;
+        }
+      }
+
       const { error: updateError } = await supabase
         .from("captures")
         .update({ synced_to_obsidian: true })
@@ -118,7 +138,10 @@ async function main() {
     }
   }
 
-  console.log(`同期完了: 新規書き出し ${written}件 / 既存ファイルのためスキップ ${skipped}件 / 失敗 ${failed}件`);
+  console.log(
+    `同期完了: 新規書き出し ${written}件 / 既存ファイルのためスキップ ${skipped}件 / 失敗 ${failed}件` +
+    (digestAppended > 0 ? ` / プロジェクトダイジェスト追記 ${digestAppended}件` : "")
+  );
 }
 
 main();
