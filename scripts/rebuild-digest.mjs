@@ -7,7 +7,7 @@ import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
 import { createClient } from "@supabase/supabase-js";
-import { findCapturesByTag, ensureProjectScaffold, digestEntry } from "./lib/obsidian-projects.mjs";
+import { rebuildDigestFromFiles } from "./lib/obsidian-projects.mjs";
 
 dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
 
@@ -39,14 +39,8 @@ async function main() {
     process.exit(1);
   }
 
-  const matches = findCapturesByTag(VAULT_PATH, slug);
-  const { capturesPath } = ensureProjectScaffold(VAULT_PATH, slug, tagDef.label);
-
-  const header = `# ${tagDef.label} キャプチャダイジェスト\n\n(このファイルは自動生成されます。手で編集しないでください。再生成: npm run rebuild-digest ${slug})\n`;
-  const body = matches.map((c) => digestEntry(c)).join("");
-  fs.writeFileSync(capturesPath, header + body, "utf-8");
-
-  console.log(`再生成完了: ${slug} (${matches.length}件) -> ${capturesPath}`);
+  const count = rebuildDigestFromFiles(VAULT_PATH, slug, tagDef.label);
+  console.log(`再生成完了: ${slug} (${count}件)`);
 }
 
 main();

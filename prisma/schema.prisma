@@ -246,6 +246,8 @@ model Capture {
   tags             String[]      @default([])
   meetingId        String?       @map("meeting_id")
   lineMessageId    String?       @unique @map("line_message_id")
+  consultSessionId String?       @map("consult_session_id") // 相談由来の場合の元セッション(履歴削除の連動用)
+  deletedAt        DateTime?     @map("deleted_at") // 削除予約。次回同期でObsidianファイル削除後に行ごと消える
   syncedToObsidian Boolean       @default(false) @map("synced_to_obsidian")
   url              String?       @map("url")
   why              String?       @map("why")

@@ -88,6 +88,7 @@ export async function POST(request: NextRequest) {
       source: "consult",
       content,
       tags,
+      consultSessionId: session?.id ?? null,
     },
   });
 

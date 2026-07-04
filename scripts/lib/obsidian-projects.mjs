@@ -108,6 +108,16 @@ export function parseCaptureFile(filePath) {
   };
 }
 
+// _captures.md をVault内のファイル群から作り直す(rebuild-digest と 削除同期の両方から使う)
+export function rebuildDigestFromFiles(vaultPath, slug, label) {
+  const matches = findCapturesByTag(vaultPath, slug);
+  const { capturesPath } = ensureProjectScaffold(vaultPath, slug, label);
+  const header = `# ${label} キャプチャダイジェスト\n\n(このファイルは自動生成されます。手で編集しないでください。再生成: npm run rebuild-digest ${slug})\n`;
+  const body = matches.map((c) => digestEntry(c)).join("");
+  fs.writeFileSync(capturesPath, header + body, "utf-8");
+  return matches.length;
+}
+
 // captures/ 配下(月フォルダ + meetings/)を走査して、指定タグを含む全captureを時系列で返す
 export function findCapturesByTag(vaultPath, tagSlug) {
   const capturesDir = path.join(vaultPath, "captures");

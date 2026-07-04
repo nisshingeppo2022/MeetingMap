@@ -127,8 +127,8 @@ export async function buildConsultContext(
 ): Promise<ConsultContext> {
   const recentCutoff = new Date(Date.now() - CONSULT_RECENT_DAYS * 24 * 60 * 60 * 1000);
   const baseWhere = tagSlug
-    ? { userId, tags: { has: tagSlug } }
-    : { userId, createdAt: { gte: recentCutoff } };
+    ? { userId, deletedAt: null, tags: { has: tagSlug } }
+    : { userId, deletedAt: null, createdAt: { gte: recentCutoff } };
 
   const [memos, meetingCaptures, tagDef] = await Promise.all([
     prisma.capture.findMany({

@@ -9,7 +9,7 @@ import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
 import { createClient } from "@supabase/supabase-js";
-import { appendToDigest } from "./lib/obsidian-projects.mjs";
+import { appendToDigest, rebuildDigestFromFiles } from "./lib/obsidian-projects.mjs";
 
 dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
 
@@ -97,6 +97,7 @@ async function main() {
     .from("captures")
     .select("*")
     .eq("synced_to_obsidian", false)
+    .is("deleted_at", null)
     .order("created_at", { ascending: true });
 
   if (error) {
@@ -104,17 +105,12 @@ async function main() {
     process.exit(1);
   }
 
-  if (!captures || captures.length === 0) {
-    console.log("同期待ちのキャプチャはありません。");
-    return;
-  }
-
   let written = 0;
   let skipped = 0;
   let failed = 0;
   let digestAppended = 0;
 
-  for (const capture of captures) {
+  for (const capture of captures ?? []) {
     const { dir, filePath } = filePathFor(capture);
     try {
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -146,9 +142,57 @@ async function main() {
     }
   }
 
+  // --- 削除予約されたキャプチャの処理(相談履歴の削除に連動) ---
+  // Vault内のファイルを削除→関係するプロジェクトダイジェストを再生成→DBから完全削除
+  const { data: deletedCaptures, error: deletedError } = await supabase
+    .from("captures")
+    .select("*")
+    .not("deleted_at", "is", null);
+  if (deletedError) {
+    console.error("削除予約captures取得エラー:", deletedError.message);
+  }
+
+  let filesDeleted = 0;
+  let rowsDeleted = 0;
+  const affectedProjects = new Map();
+
+  for (const capture of deletedCaptures ?? []) {
+    try {
+      const { filePath } = filePathFor(capture);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        filesDeleted++;
+      }
+      for (const tag of capture.tags) {
+        if (projectLabelBySlug.has(tag)) {
+          affectedProjects.set(tag, projectLabelBySlug.get(tag));
+        }
+      }
+      const { error: hardDeleteError } = await supabase
+        .from("captures")
+        .delete()
+        .eq("id", capture.id);
+      if (hardDeleteError) throw hardDeleteError;
+      rowsDeleted++;
+    } catch (e) {
+      console.error(`削除失敗 (capture_id=${capture.id}):`, e.message);
+    }
+  }
+
+  for (const [slug, label] of affectedProjects) {
+    rebuildDigestFromFiles(VAULT_PATH, slug, label);
+    console.log(`プロジェクトダイジェスト再生成: ${slug}`);
+  }
+
+  if ((captures ?? []).length === 0 && rowsDeleted === 0) {
+    console.log("同期待ち・削除待ちのキャプチャはありません。");
+    return;
+  }
+
   console.log(
     `同期完了: 新規書き出し ${written}件 / 既存ファイルのためスキップ ${skipped}件 / 失敗 ${failed}件` +
-    (digestAppended > 0 ? ` / プロジェクトダイジェスト追記 ${digestAppended}件` : "")
+    (digestAppended > 0 ? ` / プロジェクトダイジェスト追記 ${digestAppended}件` : "") +
+    (rowsDeleted > 0 ? ` / 削除 ${rowsDeleted}件(ファイル${filesDeleted}件)` : "")
   );
 }
 

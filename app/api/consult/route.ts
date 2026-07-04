@@ -42,6 +42,7 @@ export async function GET(request: NextRequest) {
     prisma.capture.findMany({
       where: {
         userId: user.id,
+        deletedAt: null,
         createdAt: { gte: new Date(Date.now() - PROJECT_ACTIVE_DAYS * 24 * 60 * 60 * 1000) },
       },
       select: { tags: true, createdAt: true },

@@ -69,6 +69,13 @@ export async function DELETE(_request: NextRequest, { params }: { params: { id: 
   });
   if (!session) return NextResponse.json({ error: "見つかりません" }, { status: 404 });
 
+  // この相談からObsidianへ送ったcaptureにも削除マークを付ける
+  // (次回のObsidian同期でVault内のファイルも削除され、その後DBからも消える)
+  await prisma.capture.updateMany({
+    where: { consultSessionId: session.id, userId: user.id, deletedAt: null },
+    data: { deletedAt: new Date() },
+  });
+
   await prisma.consultSession.delete({ where: { id: session.id } });
   return NextResponse.json({ ok: true });
 }
