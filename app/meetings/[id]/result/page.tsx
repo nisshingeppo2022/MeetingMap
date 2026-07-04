@@ -185,6 +185,7 @@ export default function ResultPage() {
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState("");
   const [copied, setCopied] = useState(false);
+  const [sendingToObsidian, setSendingToObsidian] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: ToastType } | null>(null);
   const [showContactModal, setShowContactModal] = useState(false);
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -413,6 +414,27 @@ export default function ResultPage() {
     setTimeout(() => setCopied(false), 2000);
   }
 
+  async function handleSendToObsidian() {
+    setSendingToObsidian(true);
+    try {
+      const text = exportAsText(rawNodes);
+      const res = await fetch(`/api/meetings/${id}/send-to-obsidian`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: text }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        showToast(`Obsidianへ送りました (#${data.label ?? "その他"})`, "success");
+      } else {
+        showToast("Obsidianへの送信に失敗しました", "error");
+      }
+    } catch {
+      showToast("Obsidianへの送信に失敗しました", "error");
+    }
+    setSendingToObsidian(false);
+  }
+
   async function toggleStar(node: MindmapNode) {
     const newVal = !node.isStarred;
     const res = await fetch(`/api/mindmap/nodes/${node.id}`, {
@@ -594,6 +616,14 @@ export default function ResultPage() {
                   className="text-xs px-2.5 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors disabled:opacity-50"
                 >
                   {sharing ? "..." : shareUrl ? "✓" : "🔗"}
+                </button>
+                <button
+                  onClick={handleSendToObsidian}
+                  disabled={sendingToObsidian}
+                  title="Obsidianへ送る"
+                  className="text-xs px-2.5 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors disabled:opacity-50"
+                >
+                  {sendingToObsidian ? "..." : "🗂️"}
                 </button>
               </>
             )}
