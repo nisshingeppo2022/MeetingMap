@@ -36,3 +36,7 @@ yarn-error.log*
 next-env.d.ts
 
 /app/generated/prisma
+.env*
+
+# 本番DB接続情報を扱う一時スクリプト（誤コミット防止）
+scripts/migrate-to-prod.mjs
