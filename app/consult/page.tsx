@@ -30,6 +30,9 @@ interface SessionSummary {
 
 type ConsultMode = "recent" | "tag" | "none";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ISpeechRecognition = any;
+
 export default function ConsultPage() {
   const [projects, setProjects] = useState<TagChip[]>([]);
   const [recentTags, setRecentTags] = useState<TagChip[]>([]);
@@ -40,12 +43,16 @@ export default function ConsultPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [canRetry, setCanRetry] = useState(false);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [listening, setListening] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<ISpeechRecognition | null>(null);
+  const inputBeforeSpeechRef = useRef("");
 
   useEffect(() => {
     async function loadContext() {
@@ -72,6 +79,57 @@ export default function ConsultPage() {
     setTimeout(() => setToast(null), 3000);
   }
 
+  // --- 音声入力 ---
+  function stopMic() {
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null;
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+    setListening(false);
+  }
+
+  function toggleMic() {
+    if (listening) {
+      stopMic();
+      return;
+    }
+    const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognitionAPI) {
+      showToast("この端末では音声入力が使えません");
+      return;
+    }
+    const recognition = new SpeechRecognitionAPI();
+    recognition.lang = "ja-JP";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    inputBeforeSpeechRef.current = input ? `${input} ` : "";
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    recognition.onresult = (event: any) => {
+      let finalText = "";
+      let interim = "";
+      for (let i = 0; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) finalText += result[0].transcript;
+        else interim += result[0].transcript;
+      }
+      setInput(inputBeforeSpeechRef.current + finalText + interim);
+    };
+    recognition.onend = () => {
+      recognitionRef.current = null;
+      setListening(false);
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    recognition.onerror = (event: any) => {
+      if (event.error !== "no-speech") showToast("音声入力でエラーが発生しました");
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setListening(true);
+  }
+
   function confirmDiscard(): boolean {
     return messages.length === 0 || confirm("文脈を切り替えると新しい相談になります。よろしいですか？(今の相談は履歴に残っています)");
   }
@@ -88,6 +146,7 @@ export default function ConsultPage() {
     setTagSlug(newSlug);
     setMessages([]);
     setSessionId(null);
+    setCanRetry(false);
   }
 
   function startNewChat() {
@@ -95,6 +154,7 @@ export default function ConsultPage() {
     if (!confirmDiscard()) return;
     setMessages([]);
     setSessionId(null);
+    setCanRetry(false);
     setShowHistory(false);
   }
 
@@ -118,6 +178,7 @@ export default function ConsultPage() {
     setTagSlug(data.tagSlug ?? null);
     setMessages(loaded);
     setSessionId(data.id);
+    setCanRetry(false);
     setShowHistory(false);
   }
 
@@ -135,13 +196,11 @@ export default function ConsultPage() {
     }
   }
 
-  async function handleSend() {
-    const text = input.trim();
-    if (!text || streaming) return;
-    setInput("");
-    const nextMessages: Message[] = [...messages, { role: "user", content: text }];
+  // 会話を送信する。失敗時はユーザー発言を残したまま再送可能にする
+  async function sendConversation(nextMessages: Message[]) {
     setMessages([...nextMessages, { role: "assistant", content: "" }]);
     setStreaming(true);
+    setCanRetry(false);
 
     try {
       const res = await fetch("/api/consult", {
@@ -168,17 +227,33 @@ export default function ConsultPage() {
       }
       if (!assistantText.trim()) {
         setMessages(nextMessages);
-        showToast("応答が空でした。もう一度お試しください");
+        setCanRetry(true);
+        showToast("応答が空でした。時間を置いて再送してください");
       }
     } catch (e) {
       setMessages(nextMessages);
+      setCanRetry(true);
       showToast(e instanceof Error ? e.message : "エラーが発生しました");
     } finally {
       setStreaming(false);
     }
   }
 
-  async function handleSave() {
+  async function handleSend() {
+    const text = input.trim();
+    if (!text || streaming) return;
+    stopMic();
+    setInput("");
+    await sendConversation([...messages, { role: "user", content: text }]);
+  }
+
+  async function handleRetry() {
+    if (streaming || messages.length === 0) return;
+    if (messages[messages.length - 1].role !== "user") return;
+    await sendConversation(messages);
+  }
+
+  async function handleSendToObsidian() {
     if (messages.length === 0 || saving) return;
     setSaving(true);
     try {
@@ -189,12 +264,12 @@ export default function ConsultPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.error ?? "保存に失敗しました");
+        throw new Error(err.error ?? "送信に失敗しました");
       }
       const data = await res.json();
-      showToast(`相談を保存しました${data.label ? ` #${data.label}` : ""}`);
+      showToast(`Obsidianへ送りました${data.label ? ` #${data.label}` : ""}`);
     } catch (e) {
-      showToast(e instanceof Error ? e.message : "保存に失敗しました");
+      showToast(e instanceof Error ? e.message : "送信に失敗しました");
     } finally {
       setSaving(false);
     }
@@ -212,23 +287,33 @@ export default function ConsultPage() {
       <header className="bg-white border-b border-gray-100 px-4 py-3 flex-shrink-0 z-10">
         <div className="max-w-2xl mx-auto space-y-2">
           <div className="flex items-center gap-3">
-            <Link href="/" className="text-gray-400 hover:text-gray-600 active:text-indigo-600 active:scale-75 transition-all text-xl">←</Link>
-            <h1 className="text-lg font-bold text-gray-800 flex-1">相談</h1>
-            <button
-              onClick={showHistory ? () => setShowHistory(false) : openHistory}
-              className={`text-xs px-3 py-1.5 rounded-full font-medium transition-all active:scale-95 ${
-                showHistory ? "bg-indigo-600 text-white" : "bg-gray-100 hover:bg-gray-200 text-gray-600"
-              }`}
-            >
-              🕘 履歴
-            </button>
+            {showHistory ? (
+              <button
+                onClick={() => setShowHistory(false)}
+                className="text-gray-400 hover:text-gray-600 active:text-indigo-600 active:scale-75 transition-all text-xl"
+              >
+                ←
+              </button>
+            ) : (
+              <Link href="/" className="text-gray-400 hover:text-gray-600 active:text-indigo-600 active:scale-75 transition-all text-xl">←</Link>
+            )}
+            <h1 className="text-lg font-bold text-gray-800 flex-1">{showHistory ? "相談履歴" : "相談"}</h1>
+            {!showHistory && (
+              <button
+                onClick={openHistory}
+                className="text-xs px-3 py-1.5 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 font-medium transition-all active:scale-95"
+              >
+                🕘 履歴
+              </button>
+            )}
             {messages.length > 0 && !showHistory && (
               <button
-                onClick={handleSave}
+                onClick={handleSendToObsidian}
                 disabled={saving || streaming}
-                className="text-xs px-3 py-1.5 rounded-full bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 text-indigo-600 font-medium transition-all active:scale-95"
+                title="Obsidianへ送る"
+                className="text-base w-9 h-9 flex items-center justify-center rounded-full bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 transition-all active:scale-95"
               >
-                {saving ? "保存中..." : "💾 保存"}
+                {saving ? "..." : "🗂️"}
               </button>
             )}
           </div>
@@ -335,6 +420,16 @@ export default function ConsultPage() {
               </div>
             </div>
           ))}
+          {canRetry && !streaming && (
+            <div className="flex justify-center">
+              <button
+                onClick={handleRetry}
+                className="text-xs px-4 py-2 rounded-full bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-700 font-medium transition-all active:scale-95"
+              >
+                🔄 送信できませんでした — もう一度送る
+              </button>
+            </div>
+          )}
           <div ref={bottomRef} />
         </main>
       )}
@@ -342,10 +437,21 @@ export default function ConsultPage() {
       {!showHistory && (
         <div className="bg-white border-t border-gray-100 px-4 pt-3 flex-shrink-0 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
           <div className="max-w-2xl mx-auto flex gap-2 items-end">
+            <button
+              onClick={toggleMic}
+              title={listening ? "音声入力を停止" : "音声入力"}
+              className={`flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-full transition-all active:scale-90 ${
+                listening
+                  ? "bg-red-500 text-white animate-pulse"
+                  : "bg-gray-100 hover:bg-gray-200 text-gray-600"
+              }`}
+            >
+              🎤
+            </button>
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="相談したいことを入力..."
+              placeholder={listening ? "話してください..." : "相談したいことを入力..."}
               rows={1}
               className="flex-1 px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-900 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"
               onInput={(e) => {
