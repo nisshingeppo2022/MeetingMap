@@ -316,9 +316,13 @@ export default function ConsultPage() {
                 onClick={handleSendToObsidian}
                 disabled={saving || streaming}
                 title="Obsidianへ送る"
-                className="text-base w-9 h-9 flex items-center justify-center rounded-full bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 transition-all active:scale-95"
+                className="text-base w-9 h-9 flex items-center justify-center rounded-full bg-indigo-50 hover:bg-indigo-100 transition-all active:scale-95"
               >
-                {saving ? "..." : "🗂️"}
+                {saving ? (
+                  <span className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  "🗂️"
+                )}
               </button>
             )}
           </div>

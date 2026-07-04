@@ -1,6 +1,6 @@
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { prisma } from "@/lib/prisma";
-import { classifyCapture, isQuickCaptureAllowed } from "@/lib/captures";
+import { classifyCapture, isQuickCaptureAllowed, withTimeout } from "@/lib/captures";
 import { generateContent, CONSULT_SAVE_PROMPT } from "@/lib/gemini";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -51,11 +51,16 @@ export async function POST(request: NextRequest) {
     .map((m) => `${m.role === "assistant" ? "AI" : "自分"}: ${m.content}`)
     .join("\n\n");
 
+  // 抽出は8秒で見切る(レート制限時のリトライ待ちでVercelの制限時間を超えて
+  // 送信全体が失敗するのを防ぐ。抽出できなくても送信自体は必ず成功させる)
   let content: string;
   try {
-    const extracted = await generateContent(
-      `${CONSULT_SAVE_PROMPT}\n\n## 会話全文\n${conversation}`,
-      { thinkingBudget: 0, retries: 1 }
+    const extracted = await withTimeout(
+      generateContent(
+        `${CONSULT_SAVE_PROMPT}\n\n## 会話全文\n${conversation}`,
+        { thinkingBudget: 0, retries: 0 }
+      ),
+      8000
     );
     content = extracted.trim();
   } catch {
