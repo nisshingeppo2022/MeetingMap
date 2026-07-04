@@ -33,6 +33,12 @@ export async function middleware(request: NextRequest) {
   const isPublic = publicPaths.some((p) => pathname.startsWith(p));
 
   if (!user && !isPublic) {
+    // Bearerトークンがあればスキップ
+    const authHeader = request.headers.get('authorization');
+    if (authHeader?.startsWith('Bearer ')) {
+      return NextResponse.next();
+    }
+
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/auth/login";
     return NextResponse.redirect(loginUrl);
