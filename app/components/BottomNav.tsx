@@ -17,6 +17,8 @@ export default function BottomNav() {
   // 録音中・結果・取り込みページでは非表示
   if (pathname.includes("/record") || pathname.includes("/import") || pathname.includes("/recall") || pathname.includes("/result")) return null;
   if (pathname.startsWith("/auth") || pathname.startsWith("/share")) return null;
+  // 相談ページはチャット入力欄を最下部に置くため非表示
+  if (pathname.startsWith("/consult")) return null;
 
   const isActive = (href: string) => {
     if (href === "/") return pathname === "/";
@@ -30,8 +32,8 @@ export default function BottomNav() {
           <Link
             key={item.href}
             href={item.href}
-            className={`flex-1 flex flex-col items-center py-2 gap-0.5 transition-colors ${
-              isActive(item.href) ? "text-indigo-600" : "text-gray-400 hover:text-gray-600"
+            className={`flex-1 flex flex-col items-center py-2 gap-0.5 transition-all active:bg-indigo-50 active:scale-90 rounded-lg ${
+              isActive(item.href) ? "text-indigo-600" : "text-gray-400 hover:text-gray-600 active:text-indigo-500"
             }`}
           >
             <span className="text-lg leading-none">{item.icon}</span>

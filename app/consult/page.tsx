@@ -127,7 +127,7 @@ export default function ConsultPage() {
       <header className="bg-white border-b border-gray-100 px-4 py-3 flex-shrink-0 z-10">
         <div className="max-w-2xl mx-auto space-y-2">
           <div className="flex items-center gap-3">
-            <Link href="/" className="text-gray-400 hover:text-gray-600 text-xl">←</Link>
+            <Link href="/" className="text-gray-400 hover:text-gray-600 active:text-indigo-600 active:scale-75 transition-all text-xl">←</Link>
             <h1 className="text-lg font-bold text-gray-800 flex-1">相談</h1>
             {messages.length > 0 && (
               <button

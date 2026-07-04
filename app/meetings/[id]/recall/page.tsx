@@ -97,7 +97,7 @@ export default function RecallPage() {
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <header className="bg-white border-b border-gray-100 px-4 py-4 sticky top-0 z-10">
         <div className="max-w-2xl mx-auto flex items-center gap-3">
-          <Link href="/" className="text-gray-400 hover:text-gray-600 text-xl">←</Link>
+          <Link href="/" className="text-gray-400 hover:text-gray-600 active:text-indigo-600 active:scale-75 transition-all text-xl">←</Link>
           <div className="flex-1">
             <h1 className="text-base font-bold text-gray-800">振り返り入力</h1>
             {meeting.contact && (

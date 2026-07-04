@@ -896,7 +896,7 @@ function MapInner() {
       {/* ヘッダー */}
       <header className="bg-white border-b border-gray-100 px-4 py-3 z-10 flex-shrink-0">
         <div className="max-w-5xl mx-auto flex items-center gap-3">
-          <Link href="/" className="text-gray-400 hover:text-gray-600 text-xl">←</Link>
+          <Link href="/" className="text-gray-400 hover:text-gray-600 active:text-indigo-600 active:scale-75 transition-all text-xl">←</Link>
           <h1 className="text-base font-bold text-gray-800 flex-1">全体マップ</h1>
           <div className="flex items-center gap-2">
             {crossLinks.length > 0 && pendingCount > 0 && (
