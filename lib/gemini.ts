@@ -3,6 +3,7 @@ interface GenerateOptions {
   temperature?: number;
   thinkingBudget?: number; // 0 = thinking無効（高速・省トークン）
   retries?: number;
+  fallbackModel?: string; // レート制限(429)時に自動で切り替える予備モデル(枠が別)
 }
 
 export async function generateContent(
@@ -37,6 +38,12 @@ export async function generateContent(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+
+  // レート制限時: 予備モデルが指定されていればまずそちらへ即切替(待ち時間なし)
+  if (res.status === 429 && options.fallbackModel && options.fallbackModel !== model) {
+    console.log(`Gemini rate limited on ${model}. Falling back to ${options.fallbackModel}...`);
+    return generateContent(prompt, { ...options, model: options.fallbackModel, fallbackModel: undefined });
+  }
 
   if (res.status === 429 && retries > 0) {
     const errText = await res.text();
@@ -75,20 +82,32 @@ export async function generateContentStream(
   systemPrompt: string,
   options: GenerateOptions = {}
 ): Promise<ReadableStream<Uint8Array>> {
-  const { model = "gemini-2.5-flash", temperature = 0.7 } = options;
+  const {
+    model = "gemini-2.5-flash",
+    temperature = 0.7,
+    fallbackModel = "gemini-2.5-flash-lite",
+  } = options;
 
   const apiKey = process.env.GEMINI_API_KEY!;
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents: messages.map((m) => ({ role: m.role, parts: [{ text: m.text }] })),
-      generationConfig: { temperature },
-    }),
-  });
+  const doFetch = (m: string) =>
+    fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:streamGenerateContent?alt=sse&key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: messages.map((msg) => ({ role: msg.role, parts: [{ text: msg.text }] })),
+        generationConfig: { temperature },
+      }),
+    });
+
+  let res = await doFetch(model);
+
+  // レート制限時は予備モデル(枠が別)へ即切替して再試行
+  if (res.status === 429 && fallbackModel && fallbackModel !== model) {
+    console.log(`Gemini stream rate limited on ${model}. Falling back to ${fallbackModel}...`);
+    res = await doFetch(fallbackModel);
+  }
 
   if (!res.ok || !res.body) {
     const err = await res.text().catch(() => "");

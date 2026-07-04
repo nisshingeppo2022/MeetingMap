@@ -57,7 +57,7 @@ ${content}`;
 
   try {
     const raw = await withTimeout(
-      generateContent(prompt, { thinkingBudget: 0, retries: 1 }),
+      generateContent(prompt, { thinkingBudget: 0, retries: 1, fallbackModel: "gemini-2.5-flash-lite" }),
       CLASSIFY_TIMEOUT_MS
     );
     const stripped = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "");
@@ -95,6 +95,14 @@ export interface ConsultContext {
 
 const CONSULT_MAX_CAPTURES = 50;
 const CONSULT_RECENT_DAYS = 14;
+const CONSULT_MEETING_TAKE = 10; // 含める議事録は最新10件まで
+const CONSULT_MEETING_ITEM_MAX = 4000; // 議事録1件あたりの文字数上限
+const CONSULT_MEMO_ITEM_MAX = 2000; // メモ/クリップ1件あたりの文字数上限
+const CONSULT_CONTEXT_TOTAL_MAX = 60000; // 文脈全体の文字数上限(Geminiレート制限対策)
+
+function clipText(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)}\n…(長いため省略)` : s;
+}
 
 // 相談モードの文脈を captures から組み立てる(14.2)。
 // tagSlug指定時はそのタグのcaptures、未指定時は直近2週間のタグ横断。
@@ -117,6 +125,7 @@ export async function buildConsultContext(
     prisma.capture.findMany({
       where: { ...baseWhere, source: "meetingmap" },
       orderBy: { createdAt: "desc" },
+      take: CONSULT_MEETING_TAKE,
       select: { source: true, content: true, createdAt: true },
     }),
   ]);
@@ -124,26 +133,36 @@ export async function buildConsultContext(
   const fmtDate = (d: Date) =>
     d.toLocaleDateString("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" });
 
-  const sections: string[] = [];
-  for (const m of meetings) {
-    sections.push(`[議事録 ${fmtDate(m.createdAt)}]\n${m.content}`);
-  }
+  // meetingsは新しい順で来る(末尾が最古)
+  const meetingSections: string[] = meetings.map(
+    (m) => `[議事録 ${fmtDate(m.createdAt)}]\n${clipText(m.content, CONSULT_MEETING_ITEM_MAX)}`
+  );
   let clipCount = 0;
-  // 古い順に並べ直して時系列で読めるようにする
+  const memoSections: string[] = [];
+  // 古い順に並べ直して時系列で読めるようにする(先頭が最古)
   for (const c of [...memos].reverse()) {
     if (c.source === "clip") {
       clipCount++;
       const meta = [c.summary && `要約: ${c.summary}`, c.why && `なぜ: ${c.why}`, c.url && `出典: ${c.url}`]
         .filter(Boolean)
         .join(" / ");
-      sections.push(`[クリップ ${fmtDate(c.createdAt)}]${meta ? `\n(${meta})` : ""}\n${c.content}`);
+      memoSections.push(`[クリップ ${fmtDate(c.createdAt)}]${meta ? `\n(${meta})` : ""}\n${clipText(c.content, CONSULT_MEMO_ITEM_MAX)}`);
     } else {
-      sections.push(`[メモ ${fmtDate(c.createdAt)}]\n${c.content}`);
+      memoSections.push(`[メモ ${fmtDate(c.createdAt)}]\n${clipText(c.content, CONSULT_MEMO_ITEM_MAX)}`);
     }
   }
 
+  // 全体量の上限を超える場合、古いメモ→古い議事録の順に間引く(レート制限対策)
+  const size = (arr: string[]) => arr.reduce((a, s) => a + s.length + 7, 0);
+  while (size(meetingSections) + size(memoSections) > CONSULT_CONTEXT_TOTAL_MAX && memoSections.length > 0) {
+    memoSections.shift();
+  }
+  while (size(meetingSections) + size(memoSections) > CONSULT_CONTEXT_TOTAL_MAX && meetingSections.length > 1) {
+    meetingSections.pop();
+  }
+
   return {
-    contextText: sections.join("\n\n---\n\n"),
+    contextText: [...meetingSections, ...memoSections].join("\n\n---\n\n"),
     meetingCount: meetings.length,
     memoCount: memos.length - clipCount,
     clipCount,
@@ -172,7 +191,7 @@ ${content}`;
 
   try {
     const raw = await withTimeout(
-      generateContent(prompt, { thinkingBudget: 0, retries: 1 }),
+      generateContent(prompt, { thinkingBudget: 0, retries: 1, fallbackModel: "gemini-2.5-flash-lite" }),
       CLASSIFY_TIMEOUT_MS
     );
     const stripped = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "");

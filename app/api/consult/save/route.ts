@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
     const extracted = await withTimeout(
       generateContent(
         `${CONSULT_SAVE_PROMPT}\n\n## 会話全文\n${conversation}`,
-        { thinkingBudget: 0, retries: 0 }
+        { thinkingBudget: 0, retries: 0, fallbackModel: "gemini-2.5-flash-lite" }
       ),
       8000
     );
