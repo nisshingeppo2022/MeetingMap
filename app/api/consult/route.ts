@@ -91,6 +91,7 @@ export async function GET(request: NextRequest) {
     breakdown: context
       ? { meetings: context.meetingCount, memos: context.memoCount, clips: context.clipCount }
       : null,
+    sources: context?.sources ?? [],
   });
 }
 

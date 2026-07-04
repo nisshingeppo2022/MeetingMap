@@ -15,6 +15,13 @@ interface Breakdown {
   clips: number;
 }
 
+interface ConsultSource {
+  kind: "議事録" | "会議" | "メモ" | "クリップ";
+  date: string;
+  title: string;
+  excerpt: string;
+}
+
 interface Message {
   role: "user" | "assistant";
   content: string;
@@ -48,6 +55,8 @@ export default function ConsultPage() {
   const [showHistory, setShowHistory] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [sources, setSources] = useState<ConsultSource[]>([]);
+  const [showSources, setShowSources] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   // 音声入力(録音ページと同じフックを使用)
   const { segments, isListening, isSupported, start: startSpeech, stop: stopSpeech } = useSpeechRecognition({
@@ -73,6 +82,7 @@ export default function ConsultPage() {
         setProjects(data.projects);
         setRecentTags(data.recentTags ?? []);
         setBreakdown(data.breakdown);
+        setSources(data.sources ?? []);
       }
     }
     loadContext();
@@ -351,13 +361,20 @@ export default function ConsultPage() {
                   </button>
                 ))}
               </div>
-              <p className="text-xs text-gray-400">
-                {mode === "none"
-                  ? "文脈: なし(自由な相談) — チップを押すと過去の記録を読み込みます"
-                  : breakdown
-                    ? `文脈: 議事録${breakdown.meetings}件・メモ${breakdown.memos}件・クリップ${breakdown.clips}件`
-                    : "文脈: 読み込み中..."}
-              </p>
+              {mode === "none" ? (
+                <p className="text-xs text-gray-400">
+                  文脈: なし(自由な相談) — チップを押すと過去の記録を読み込みます
+                </p>
+              ) : breakdown ? (
+                <button
+                  onClick={() => setShowSources(true)}
+                  className="text-xs text-indigo-500 hover:text-indigo-700 active:opacity-60 transition-all"
+                >
+                  📚 文脈: 議事録{breakdown.meetings}件・メモ{breakdown.memos}件・クリップ{breakdown.clips}件 ▸
+                </button>
+              ) : (
+                <p className="text-xs text-gray-400">文脈: 読み込み中...</p>
+              )}
             </>
           )}
         </div>
@@ -480,6 +497,58 @@ export default function ConsultPage() {
             >
               {streaming ? "..." : "送信"}
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* 引用元(AIが読んでいる記録)のポップアップ */}
+      {showSources && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40 flex items-end justify-center"
+          onClick={() => setShowSources(false)}
+        >
+          <div
+            className="bg-white w-full max-w-2xl max-h-[75dvh] rounded-t-2xl flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 flex-shrink-0">
+              <p className="text-sm font-bold text-gray-800">📚 AIが読んでいる記録 ({sources.length}件)</p>
+              <button
+                onClick={() => setShowSources(false)}
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200 active:scale-90 text-gray-500 transition-all"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="overflow-y-auto px-4 py-3 space-y-3 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+              {sources.length === 0 ? (
+                <p className="text-center text-gray-400 text-sm py-8">読み込んでいる記録はありません</p>
+              ) : (
+                sources.map((s, i) => (
+                  <div key={i} className="bg-gray-50 rounded-xl p-3 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${
+                          s.kind === "議事録" || s.kind === "会議"
+                            ? "bg-indigo-100 text-indigo-600"
+                            : s.kind === "クリップ"
+                              ? "bg-amber-100 text-amber-700"
+                              : "bg-gray-200 text-gray-600"
+                        }`}
+                      >
+                        {s.kind}
+                      </span>
+                      <span className="text-xs text-gray-400">{s.date}</span>
+                    </div>
+                    <p className="text-sm font-medium text-gray-800">{s.title}</p>
+                    <p className="text-xs text-gray-500 whitespace-pre-wrap break-words">
+                      {s.excerpt}
+                      {s.excerpt.length >= 300 && "…"}
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       )}
