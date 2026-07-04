@@ -1,11 +1,11 @@
 import { prisma } from "@/lib/prisma";
-import { verifyDeviceToken, classifyCapture } from "@/lib/captures";
+import { verifyDeviceToken, classifyCapture, enrichClip } from "@/lib/captures";
 import { NextRequest, NextResponse } from "next/server";
 import type { CaptureSource } from "@prisma/client";
 
 export const maxDuration = 15;
 
-const VALID_SOURCES: CaptureSource[] = ["shortcut", "voice", "line", "obsidian", "meetingmap"];
+const VALID_SOURCES: CaptureSource[] = ["shortcut", "voice", "line", "obsidian", "meetingmap", "clip"];
 
 // 共通インジェストAPI。デバイストークン(Bearer)で認証する
 // (Webセッションではなく、ショートカット等の外部デバイスからの呼び出しを想定)
@@ -22,6 +22,8 @@ export async function POST(request: NextRequest) {
   const content: string = typeof body.content === "string" ? body.content.trim() : "";
   const source: CaptureSource = VALID_SOURCES.includes(body.source) ? body.source : "shortcut";
   const explicitTags: string[] | undefined = Array.isArray(body.tags) ? body.tags : undefined;
+  const url: string | null = typeof body.url === "string" ? body.url.trim() || null : null;
+  const why: string | null = typeof body.why === "string" ? body.why.trim() || null : null;
 
   if (!content) {
     return NextResponse.json({ error: "content は必須です" }, { status: 400 });
@@ -33,6 +35,8 @@ export async function POST(request: NextRequest) {
       source,
       content,
       tags: explicitTags ?? [],
+      url,
+      why,
     },
   });
 
@@ -46,6 +50,20 @@ export async function POST(request: NextRequest) {
     const result = await classifyCapture(content, tagDefs);
     tags = result.tags;
     await prisma.capture.update({ where: { id: capture.id }, data: { tags } });
+  }
+
+  // クリップ(他者の言葉の引用)は通常のタグ分類に加えて要約・検索キーワードを付与する
+  if (source === "clip") {
+    const enrichment = await enrichClip(content, why);
+    await prisma.capture.update({
+      where: { id: capture.id },
+      data: {
+        summary: enrichment.summary || null,
+        useFor: enrichment.useFor,
+        keywords: enrichment.keywords,
+        why: enrichment.why || why,
+      },
+    });
   }
 
   const firstTagDef = tags.length > 0

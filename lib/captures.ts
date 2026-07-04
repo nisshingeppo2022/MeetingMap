@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import { prisma } from "@/lib/prisma";
-import { generateContent, CAPTURE_TAG_PROMPT } from "@/lib/gemini";
+import { generateContent, CAPTURE_TAG_PROMPT, CLIP_ENRICH_PROMPT } from "@/lib/gemini";
 
 const CLASSIFY_TIMEOUT_MS = 3000;
 
@@ -73,6 +73,47 @@ ${content}`;
     if (filtered.length === 0) return fallback;
 
     return { tags: filtered, confidence: "high" };
+  } catch {
+    return fallback;
+  }
+}
+
+export interface ClipEnrichment {
+  summary: string;
+  useFor: string[];
+  keywords: string[];
+  why: string;
+}
+
+// クリップ(他者の言葉の引用)にsummary/use_for/keywords/whyを付与する。
+// 失敗・タイムアウト時は空のエンリッチメントを返す(取りこぼしゼロを優先)
+export async function enrichClip(content: string, why: string | null): Promise<ClipEnrichment> {
+  const fallback: ClipEnrichment = { summary: "", useFor: [], keywords: [], why: why ?? "" };
+
+  const prompt = `${CLIP_ENRICH_PROMPT}
+
+## なぜ気になったか(入力・空の場合は推定すること)
+${why ?? "(未入力)"}
+
+## クリップ本文
+${content}`;
+
+  try {
+    const raw = await withTimeout(
+      generateContent(prompt, { thinkingBudget: 0, retries: 1 }),
+      CLASSIFY_TIMEOUT_MS
+    );
+    const stripped = raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "");
+    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return fallback;
+    const parsed = JSON.parse(jsonMatch[0]);
+
+    return {
+      summary: typeof parsed.summary === "string" ? parsed.summary : "",
+      useFor: Array.isArray(parsed.use_for) ? parsed.use_for : [],
+      keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [],
+      why: typeof parsed.why === "string" && parsed.why ? parsed.why : (why ?? ""),
+    };
   } catch {
     return fallback;
   }

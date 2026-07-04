@@ -20,9 +20,10 @@ const generateContentMock = vi.fn();
 vi.mock("@/lib/gemini", () => ({
   generateContent: (...args: unknown[]) => generateContentMock(...args),
   CAPTURE_TAG_PROMPT: "PROMPT",
+  CLIP_ENRICH_PROMPT: "CLIP_PROMPT",
 }));
 
-import { hashToken, verifyDeviceToken, classifyCapture } from "./captures";
+import { hashToken, verifyDeviceToken, classifyCapture, enrichClip } from "./captures";
 
 const TAG_DEFS = [
   { slug: "dx-highschool", label: "DX高校事業", description: "補助金・見積・提出書類" },
@@ -125,4 +126,44 @@ describe("classifyCapture", () => {
     const result = await classifyCapture("見積書を提出書類にまとめたい", TAG_DEFS);
     expect(result).toEqual({ tags: ["dx-highschool"], confidence: "high" });
   });
+});
+
+describe("enrichClip", () => {
+  beforeEach(() => {
+    generateContentMock.mockReset();
+  });
+
+  it("正常時はsummary/use_for/keywords/whyを返す", async () => {
+    generateContentMock.mockResolvedValue(
+      JSON.stringify({
+        summary: "探究学習に関する記事の要約",
+        use_for: ["学校HPブログ", "探究学習推進"],
+        keywords: ["探究学習", "試行錯誤"],
+        why: "生徒指導のヒントになりそう",
+      })
+    );
+    const result = await enrichClip("記事本文...", "生徒指導のヒントになりそう");
+    expect(result).toEqual({
+      summary: "探究学習に関する記事の要約",
+      useFor: ["学校HPブログ", "探究学習推進"],
+      keywords: ["探究学習", "試行錯誤"],
+      why: "生徒指導のヒントになりそう",
+    });
+  });
+
+  it("whyが未入力でもGeminiの推定結果で補完される", async () => {
+    generateContentMock.mockResolvedValue(
+      JSON.stringify({ summary: "要約", use_for: [], keywords: [], why: "推定されたなぜ" })
+    );
+    const result = await enrichClip("記事本文...", null);
+    expect(result.why).toBe("推定されたなぜ");
+  });
+
+  it("Geminiがタイムアウトしても空のエンリッチメントを返し例外を投げない", async () => {
+    generateContentMock.mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve("{}"), 4000))
+    );
+    const result = await enrichClip("記事本文...", "元のなぜ");
+    expect(result).toEqual({ summary: "", useFor: [], keywords: [], why: "元のなぜ" });
+  }, 8000);
 });

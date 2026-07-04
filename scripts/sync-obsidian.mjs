@@ -53,20 +53,28 @@ function filePathFor(capture) {
   return { dir: monthDir, filePath: path.join(monthDir, fileName) };
 }
 
+function yamlList(arr) {
+  return arr && arr.length > 0 ? `[${arr.join(", ")}]` : "[]";
+}
+
 function buildMarkdown(capture) {
-  const tagsYaml = capture.tags.length > 0 ? `[${capture.tags.join(", ")}]` : "[]";
-  const frontmatter = [
+  const lines = [
     "---",
     `source: ${capture.source}`,
-    `tags: ${tagsYaml}`,
+    `tags: ${yamlList(capture.tags)}`,
     `created: ${toJstIso(new Date(capture.created_at))}`,
     `capture_id: ${capture.id}`,
-    "---",
-    "",
-    capture.content,
-    "",
-  ].join("\n");
-  return frontmatter;
+  ];
+
+  // クリップ由来の付加情報(あるものだけ書き出す)
+  if (capture.url) lines.push(`url: ${capture.url}`);
+  if (capture.why) lines.push(`why: ${capture.why}`);
+  if (capture.summary) lines.push(`summary: ${capture.summary}`);
+  if (capture.use_for && capture.use_for.length > 0) lines.push(`use_for: ${yamlList(capture.use_for)}`);
+  if (capture.keywords && capture.keywords.length > 0) lines.push(`keywords: ${yamlList(capture.keywords)}`);
+
+  lines.push("---", "", capture.content, "");
+  return lines.join("\n");
 }
 
 async function main() {

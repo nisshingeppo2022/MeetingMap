@@ -234,6 +234,7 @@ enum CaptureSource {
   line
   obsidian
   meetingmap
+  clip
 }
 
 model Capture {
@@ -245,6 +246,11 @@ model Capture {
   meetingId        String?       @map("meeting_id")
   lineMessageId    String?       @unique @map("line_message_id")
   syncedToObsidian Boolean       @default(false) @map("synced_to_obsidian")
+  url              String?       @map("url")
+  why              String?       @map("why")
+  summary          String?       @map("summary")
+  useFor           String[]      @default([]) @map("use_for")
+  keywords         String[]      @default([]) @map("keywords")
   createdAt        DateTime      @default(now()) @map("created_at")
 
   meeting Meeting? @relation(fields: [meetingId], references: [id])
