@@ -17,7 +17,9 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => ({}));
-  const tagSlug: string | null = typeof body.tagSlug === "string" && body.tagSlug ? body.tagSlug : null;
+  const rawTagSlug: string | null = typeof body.tagSlug === "string" && body.tagSlug ? body.tagSlug : null;
+  // 文脈なし(none)/最近2週間(recent)の相談はタグ引き継ぎ無し→AI分類に回す
+  const tagSlug = body.mode === "tag" || body.mode === undefined ? rawTagSlug : null;
   const rawMessages: { role: string; content: string }[] = Array.isArray(body.messages) ? body.messages : [];
   const conversation = rawMessages
     .filter((m) => typeof m.content === "string" && m.content.trim())

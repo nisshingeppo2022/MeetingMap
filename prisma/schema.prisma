@@ -273,6 +273,20 @@ model CaptureTagDef {
   @@map("capture_tag_defs")
 }
 
+model ConsultSession {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  title     String
+  mode      String   @default("recent") // recent | tag | none
+  tagSlug   String?  @map("tag_slug")
+  messages  Json     @default("[]")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @map("updated_at")
+
+  @@index([userId, updatedAt])
+  @@map("consult_sessions")
+}
+
 model DeviceToken {
   id         String    @id @default(uuid())
   userId     String    @map("user_id")

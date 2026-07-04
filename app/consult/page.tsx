@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
-interface ProjectTag {
+interface TagChip {
   slug: string;
   label: string;
 }
@@ -19,21 +19,40 @@ interface Message {
   content: string;
 }
 
+interface SessionSummary {
+  id: string;
+  title: string;
+  mode: string;
+  tagSlug: string | null;
+  tagLabel: string | null;
+  updatedAt: string;
+}
+
+type ConsultMode = "recent" | "tag" | "none";
+
 export default function ConsultPage() {
-  const [projects, setProjects] = useState<ProjectTag[]>([]);
-  const [recentTags, setRecentTags] = useState<ProjectTag[]>([]);
+  const [projects, setProjects] = useState<TagChip[]>([]);
+  const [recentTags, setRecentTags] = useState<TagChip[]>([]);
+  const [mode, setMode] = useState<ConsultMode>("recent");
   const [tagSlug, setTagSlug] = useState<string | null>(null);
   const [breakdown, setBreakdown] = useState<Breakdown | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     async function loadContext() {
-      const res = await fetch(`/api/consult${tagSlug ? `?tag=${encodeURIComponent(tagSlug)}` : ""}`);
+      const params = new URLSearchParams();
+      params.set("mode", mode);
+      if (mode === "tag" && tagSlug) params.set("tag", tagSlug);
+      const res = await fetch(`/api/consult?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
         setProjects(data.projects);
@@ -42,7 +61,7 @@ export default function ConsultPage() {
       }
     }
     loadContext();
-  }, [tagSlug]);
+  }, [mode, tagSlug]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -53,11 +72,67 @@ export default function ConsultPage() {
     setTimeout(() => setToast(null), 3000);
   }
 
-  function switchContext(slug: string | null) {
+  function confirmDiscard(): boolean {
+    return messages.length === 0 || confirm("文脈を切り替えると新しい相談になります。よろしいですか？(今の相談は履歴に残っています)");
+  }
+
+  // チップのタップ。選択中のチップをもう一度押すと解除(文脈なし)になる
+  function toggleContext(next: ConsultMode, slug: string | null) {
     if (streaming) return;
-    if (messages.length > 0 && !confirm("文脈を切り替えると会話がリセットされます。よろしいですか？")) return;
-    setTagSlug(slug);
+    const isSame = mode === next && tagSlug === slug;
+    const newMode: ConsultMode = isSame ? "none" : next;
+    const newSlug = isSame ? null : slug;
+    if (newMode === mode && newSlug === tagSlug) return;
+    if (!confirmDiscard()) return;
+    setMode(newMode);
+    setTagSlug(newSlug);
     setMessages([]);
+    setSessionId(null);
+  }
+
+  function startNewChat() {
+    if (streaming) return;
+    if (!confirmDiscard()) return;
+    setMessages([]);
+    setSessionId(null);
+    setShowHistory(false);
+  }
+
+  async function openHistory() {
+    setShowHistory(true);
+    setHistoryLoading(true);
+    const res = await fetch("/api/consult/sessions");
+    if (res.ok) setSessions(await res.json());
+    setHistoryLoading(false);
+  }
+
+  async function resumeSession(id: string) {
+    const res = await fetch(`/api/consult/sessions/${id}`);
+    if (!res.ok) {
+      showToast("読み込みに失敗しました");
+      return;
+    }
+    const data = await res.json();
+    const loaded: Message[] = Array.isArray(data.messages) ? data.messages : [];
+    setMode(data.mode === "tag" || data.mode === "none" ? data.mode : "recent");
+    setTagSlug(data.tagSlug ?? null);
+    setMessages(loaded);
+    setSessionId(data.id);
+    setShowHistory(false);
+  }
+
+  async function deleteSession(id: string) {
+    if (!confirm("この相談履歴を削除しますか？")) return;
+    const res = await fetch(`/api/consult/sessions/${id}`, { method: "DELETE" });
+    if (res.ok) {
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+      if (sessionId === id) {
+        setMessages([]);
+        setSessionId(null);
+      }
+    } else {
+      showToast("削除に失敗しました");
+    }
   }
 
   async function handleSend() {
@@ -72,12 +147,15 @@ export default function ConsultPage() {
       const res = await fetch("/api/consult", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: nextMessages, tagSlug }),
+        body: JSON.stringify({ messages: nextMessages, mode, tagSlug, sessionId }),
       });
       if (!res.ok || !res.body) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error ?? "AIの呼び出しに失敗しました");
       }
+      const newSessionId = res.headers.get("X-Session-Id");
+      if (newSessionId) setSessionId(newSessionId);
+
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let assistantText = "";
@@ -107,7 +185,7 @@ export default function ConsultPage() {
       const res = await fetch("/api/consult/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages, tagSlug }),
+        body: JSON.stringify({ messages, mode, tagSlug }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -122,6 +200,13 @@ export default function ConsultPage() {
     }
   }
 
+  const chipClass = (selected: boolean, dashed = false) =>
+    `flex-shrink-0 text-xs px-3 py-1.5 rounded-full border transition-all active:scale-95 ${
+      selected
+        ? "bg-indigo-600 border-indigo-600 text-white"
+        : `bg-white ${dashed ? "border-dashed border-gray-300 text-gray-500" : "border-gray-200 text-gray-600"} hover:border-indigo-300`
+    }`;
+
   return (
     <div className="h-dvh bg-gray-50 flex flex-col overflow-hidden">
       <header className="bg-white border-b border-gray-100 px-4 py-3 flex-shrink-0 z-10">
@@ -129,113 +214,156 @@ export default function ConsultPage() {
           <div className="flex items-center gap-3">
             <Link href="/" className="text-gray-400 hover:text-gray-600 active:text-indigo-600 active:scale-75 transition-all text-xl">←</Link>
             <h1 className="text-lg font-bold text-gray-800 flex-1">相談</h1>
-            {messages.length > 0 && (
+            <button
+              onClick={showHistory ? () => setShowHistory(false) : openHistory}
+              className={`text-xs px-3 py-1.5 rounded-full font-medium transition-all active:scale-95 ${
+                showHistory ? "bg-indigo-600 text-white" : "bg-gray-100 hover:bg-gray-200 text-gray-600"
+              }`}
+            >
+              🕘 履歴
+            </button>
+            {messages.length > 0 && !showHistory && (
               <button
                 onClick={handleSave}
                 disabled={saving || streaming}
-                className="text-xs px-3 py-1.5 rounded-full bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 text-indigo-600 font-medium transition-colors"
+                className="text-xs px-3 py-1.5 rounded-full bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 text-indigo-600 font-medium transition-all active:scale-95"
               >
-                {saving ? "保存中..." : "💾 この相談を保存"}
+                {saving ? "保存中..." : "💾 保存"}
               </button>
             )}
           </div>
-          <div className="flex gap-2 overflow-x-auto pb-0.5 -mx-1 px-1">
-            <button
-              onClick={() => switchContext(null)}
-              className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                tagSlug === null
-                  ? "bg-indigo-600 border-indigo-600 text-white"
-                  : "bg-white border-gray-200 text-gray-600 hover:border-indigo-300"
-              }`}
-            >
-              最近2週間
-            </button>
-            {projects.map((p) => (
-              <button
-                key={p.slug}
-                onClick={() => switchContext(p.slug)}
-                className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                  tagSlug === p.slug
-                    ? "bg-indigo-600 border-indigo-600 text-white"
-                    : "bg-white border-gray-200 text-gray-600 hover:border-indigo-300"
-                }`}
-              >
-                📁 {p.label}
-              </button>
-            ))}
-            {recentTags.map((t) => (
-              <button
-                key={t.slug}
-                onClick={() => switchContext(t.slug)}
-                className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                  tagSlug === t.slug
-                    ? "bg-indigo-600 border-indigo-600 text-white"
-                    : "bg-white border-dashed border-gray-300 text-gray-500 hover:border-indigo-300"
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-          {breakdown && (
-            <p className="text-xs text-gray-400">
-              文脈: 議事録{breakdown.meetings}件・メモ{breakdown.memos}件・クリップ{breakdown.clips}件
-            </p>
+          {!showHistory && (
+            <>
+              <div className="flex gap-2 overflow-x-auto pb-0.5 -mx-1 px-1">
+                <button onClick={() => toggleContext("recent", null)} className={chipClass(mode === "recent")}>
+                  最近2週間
+                </button>
+                {projects.map((p) => (
+                  <button
+                    key={p.slug}
+                    onClick={() => toggleContext("tag", p.slug)}
+                    className={chipClass(mode === "tag" && tagSlug === p.slug)}
+                  >
+                    📁 {p.label}
+                  </button>
+                ))}
+                {recentTags.map((t) => (
+                  <button
+                    key={t.slug}
+                    onClick={() => toggleContext("tag", t.slug)}
+                    className={chipClass(mode === "tag" && tagSlug === t.slug, true)}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-gray-400">
+                {mode === "none"
+                  ? "文脈: なし(自由な相談) — チップを押すと過去の記録を読み込みます"
+                  : breakdown
+                    ? `文脈: 議事録${breakdown.meetings}件・メモ${breakdown.memos}件・クリップ${breakdown.clips}件`
+                    : "文脈: 読み込み中..."}
+              </p>
+            </>
           )}
         </div>
       </header>
 
-      <main className="flex-1 min-h-0 max-w-2xl mx-auto w-full px-4 py-4 space-y-3 overflow-y-auto">
-        {messages.length === 0 && (
-          <div className="text-center py-16 space-y-2">
-            <p className="text-3xl">💬</p>
-            <p className="text-sm text-gray-500">
-              {tagSlug
-                ? "このプロジェクトの経緯を知った状態で相談に乗ります"
-                : "直近2週間のメモ・議事録を知った状態で相談に乗ります"}
-            </p>
-            <p className="text-xs text-gray-400">気になっていることを話しかけてください</p>
-          </div>
-        )}
-        {messages.map((m, i) => (
-          <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-            <div
-              className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words ${
-                m.role === "user"
-                  ? "bg-indigo-600 text-white rounded-br-md"
-                  : "bg-white border border-gray-100 text-gray-800 shadow-sm rounded-bl-md"
-              }`}
-            >
-              {m.content || (streaming && i === messages.length - 1 ? "…" : "")}
-            </div>
-          </div>
-        ))}
-        <div ref={bottomRef} />
-      </main>
-
-      <div className="bg-white border-t border-gray-100 px-4 pt-3 flex-shrink-0 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
-        <div className="max-w-2xl mx-auto flex gap-2 items-end">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="相談したいことを入力..."
-            rows={1}
-            className="flex-1 px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-900 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            onInput={(e) => {
-              const el = e.currentTarget;
-              el.style.height = "auto";
-              el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
-            }}
-          />
+      {showHistory ? (
+        <main className="flex-1 min-h-0 max-w-2xl mx-auto w-full px-4 py-4 space-y-2 overflow-y-auto">
           <button
-            onClick={handleSend}
-            disabled={streaming || !input.trim()}
-            className="flex-shrink-0 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-xl text-sm font-medium transition-colors"
+            onClick={startNewChat}
+            className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white rounded-xl text-sm font-medium transition-all"
           >
-            {streaming ? "..." : "送信"}
+            ＋ 新しい相談を始める
           </button>
+          {historyLoading ? (
+            <p className="text-center text-gray-400 text-sm py-8">読み込み中...</p>
+          ) : sessions.length === 0 ? (
+            <p className="text-center text-gray-400 text-sm py-8">まだ相談履歴がありません</p>
+          ) : (
+            sessions.map((s) => (
+              <div
+                key={s.id}
+                className={`bg-white rounded-xl border px-4 py-3 shadow-sm flex items-center gap-3 ${
+                  s.id === sessionId ? "border-indigo-300" : "border-gray-100"
+                }`}
+              >
+                <button onClick={() => resumeSession(s.id)} className="flex-1 min-w-0 text-left active:opacity-60 transition-opacity">
+                  <p className="text-sm font-medium text-gray-800 truncate">{s.title}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {new Date(s.updatedAt).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    {" · "}
+                    {s.mode === "none" ? "文脈なし" : s.mode === "recent" ? "最近2週間" : s.tagLabel ?? s.tagSlug}
+                  </p>
+                </button>
+                <button
+                  onClick={() => deleteSession(s.id)}
+                  className="flex-shrink-0 text-xs px-2.5 py-1.5 rounded-full bg-red-50 hover:bg-red-100 active:scale-95 text-red-500 transition-all"
+                >
+                  削除
+                </button>
+              </div>
+            ))
+          )}
+        </main>
+      ) : (
+        <main className="flex-1 min-h-0 max-w-2xl mx-auto w-full px-4 py-4 space-y-3 overflow-y-auto">
+          {messages.length === 0 && (
+            <div className="text-center py-16 space-y-2">
+              <p className="text-3xl">💬</p>
+              <p className="text-sm text-gray-500">
+                {mode === "none"
+                  ? "過去の記録は読み込まない、自由な相談です"
+                  : mode === "tag"
+                    ? "このトピックの経緯を知った状態で相談に乗ります"
+                    : "直近2週間のメモ・議事録を知った状態で相談に乗ります"}
+              </p>
+              <p className="text-xs text-gray-400">気になっていることを話しかけてください</p>
+            </div>
+          )}
+          {messages.map((m, i) => (
+            <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div
+                className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words ${
+                  m.role === "user"
+                    ? "bg-indigo-600 text-white rounded-br-md"
+                    : "bg-white border border-gray-100 text-gray-800 shadow-sm rounded-bl-md"
+                }`}
+              >
+                {m.content || (streaming && i === messages.length - 1 ? "…" : "")}
+              </div>
+            </div>
+          ))}
+          <div ref={bottomRef} />
+        </main>
+      )}
+
+      {!showHistory && (
+        <div className="bg-white border-t border-gray-100 px-4 pt-3 flex-shrink-0 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+          <div className="max-w-2xl mx-auto flex gap-2 items-end">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="相談したいことを入力..."
+              rows={1}
+              className="flex-1 px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-900 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              onInput={(e) => {
+                const el = e.currentTarget;
+                el.style.height = "auto";
+                el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+              }}
+            />
+            <button
+              onClick={handleSend}
+              disabled={streaming || !input.trim()}
+              className="flex-shrink-0 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 active:scale-95 text-white rounded-xl text-sm font-medium transition-all"
+            >
+              {streaming ? "..." : "送信"}
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {toast && (
         <div className="fixed bottom-20 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-sm px-4 py-2 rounded-full shadow-lg z-20">

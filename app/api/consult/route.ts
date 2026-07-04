@@ -3,10 +3,21 @@ import { prisma } from "@/lib/prisma";
 import { buildConsultContext, isQuickCaptureAllowed } from "@/lib/captures";
 import { generateContentStream, CONSULT_SYSTEM_PROMPT, ChatMessage } from "@/lib/gemini";
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
 
 export const maxDuration = 60;
 
-// GET: 相談モードの文脈選択肢(プロジェクトタグ一覧)と、選択中の文脈の内訳を返す
+type ConsultMode = "recent" | "tag" | "none";
+
+function parseMode(raw: unknown, tagSlug: string | null): ConsultMode {
+  if (raw === "none") return "none";
+  if (raw === "tag" && tagSlug) return "tag";
+  if (raw === "recent") return "recent";
+  // 旧クライアント互換: mode未指定ならtagSlugの有無で判定
+  return tagSlug ? "tag" : "recent";
+}
+
+// GET: 文脈候補(プロジェクト/最近よく出るタグ)と選択中の文脈の内訳を返す
 export async function GET(request: NextRequest) {
   const supabase = await createServerSupabaseClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -16,6 +27,7 @@ export async function GET(request: NextRequest) {
   }
 
   const tagSlug = request.nextUrl.searchParams.get("tag") || null;
+  const mode = parseMode(request.nextUrl.searchParams.get("mode"), tagSlug);
 
   const PROJECT_ACTIVE_DAYS = 90; // この期間キャプチャが無いプロジェクトは候補から自然に消える
   const RECENT_TAG_DAYS = 30;
@@ -34,7 +46,9 @@ export async function GET(request: NextRequest) {
       },
       select: { tags: true, createdAt: true },
     }),
-    buildConsultContext(user.id, tagSlug),
+    mode === "none"
+      ? Promise.resolve(null)
+      : buildConsultContext(user.id, mode === "tag" ? tagSlug : null),
   ]);
 
   // タグごとの直近利用状況を集計
@@ -74,15 +88,14 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     projects,
     recentTags,
-    breakdown: {
-      meetings: context.meetingCount,
-      memos: context.memoCount,
-      clips: context.clipCount,
-    },
+    breakdown: context
+      ? { meetings: context.meetingCount, memos: context.memoCount, clips: context.clipCount }
+      : null,
   });
 }
 
-// POST: 壁打ち相談。capturesから文脈を組み立ててGeminiにストリーミングさせる
+// POST: 壁打ち相談。capturesから文脈を組み立ててGeminiにストリーミングさせ、
+// 応答完了時にセッション(履歴)をDBに保存する。レスポンスヘッダ X-Session-Id で返す
 export async function POST(request: NextRequest) {
   const supabase = await createServerSupabaseClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -93,27 +106,87 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json().catch(() => ({}));
   const tagSlug: string | null = typeof body.tagSlug === "string" && body.tagSlug ? body.tagSlug : null;
+  const mode = parseMode(body.mode, tagSlug);
+  const requestedSessionId: string | null =
+    typeof body.sessionId === "string" && body.sessionId ? body.sessionId : null;
   const rawMessages: { role: string; content: string }[] = Array.isArray(body.messages) ? body.messages : [];
-  const messages: ChatMessage[] = rawMessages
+  const cleanMessages = rawMessages
     .filter((m) => typeof m.content === "string" && m.content.trim())
-    .map((m) => ({ role: m.role === "assistant" ? "model" : "user", text: m.content }));
+    .map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
+  const messages: ChatMessage[] = cleanMessages.map((m) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    text: m.content,
+  }));
 
   if (messages.length === 0 || messages[messages.length - 1].role !== "user") {
     return NextResponse.json({ error: "messages は必須です" }, { status: 400 });
   }
 
-  const context = await buildConsultContext(user.id, tagSlug);
-  const systemPrompt = `${CONSULT_SYSTEM_PROMPT}
+  // セッションの解決(指定があれば自分のものか確認、無ければ新規作成)
+  let sessionId = requestedSessionId;
+  if (sessionId) {
+    const existing = await prisma.consultSession.findFirst({
+      where: { id: sessionId, userId: user.id },
+      select: { id: true },
+    });
+    if (!existing) sessionId = null;
+  }
+  if (!sessionId) {
+    const firstUser = cleanMessages.find((m) => m.role === "user");
+    const title = (firstUser?.content ?? "相談").slice(0, 40);
+    const created = await prisma.consultSession.create({
+      data: { id: randomUUID(), userId: user.id, title, mode, tagSlug: mode === "tag" ? tagSlug : null },
+      select: { id: true },
+    });
+    sessionId = created.id;
+  }
+
+  let systemPrompt: string;
+  if (mode === "none") {
+    systemPrompt = `${CONSULT_SYSTEM_PROMPT}
+
+## プロジェクトの文脈
+(今回は文脈なしの自由な相談です。過去の記録は参照せず、一般的な壁打ち相手として応じてください)`;
+  } else {
+    const context = await buildConsultContext(user.id, mode === "tag" ? tagSlug : null);
+    systemPrompt = `${CONSULT_SYSTEM_PROMPT}
 
 ## プロジェクトの文脈(議事録${context.meetingCount}件・メモ${context.memoCount}件・クリップ${context.clipCount}件)
 ${context.contextText || "(まだ文脈になるキャプチャがありません。その旨を伝えた上で、一般的な壁打ち相手として応じてください)"}`;
+  }
 
   try {
     const stream = await generateContentStream(messages, systemPrompt);
-    return new Response(stream, {
+
+    // ストリームを素通ししつつ全文を貯め、完了時にセッションへ保存する
+    const decoder = new TextDecoder();
+    let assistantText = "";
+    const finalSessionId = sessionId;
+    const persist = new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        assistantText += decoder.decode(chunk, { stream: true });
+        controller.enqueue(chunk);
+      },
+      async flush() {
+        try {
+          await prisma.consultSession.update({
+            where: { id: finalSessionId },
+            data: {
+              messages: [...cleanMessages, { role: "assistant", content: assistantText }],
+              updatedAt: new Date(),
+            },
+          });
+        } catch (e) {
+          console.error("consult session save failed:", e);
+        }
+      },
+    });
+
+    return new Response(stream.pipeThrough(persist), {
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
         "Cache-Control": "no-cache",
+        "X-Session-Id": sessionId,
       },
     });
   } catch (e) {
