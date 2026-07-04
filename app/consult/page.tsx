@@ -21,6 +21,7 @@ interface Message {
 
 export default function ConsultPage() {
   const [projects, setProjects] = useState<ProjectTag[]>([]);
+  const [recentTags, setRecentTags] = useState<ProjectTag[]>([]);
   const [tagSlug, setTagSlug] = useState<string | null>(null);
   const [breakdown, setBreakdown] = useState<Breakdown | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -36,6 +37,7 @@ export default function ConsultPage() {
       if (res.ok) {
         const data = await res.json();
         setProjects(data.projects);
+        setRecentTags(data.recentTags ?? []);
         setBreakdown(data.breakdown);
       }
     }
@@ -121,8 +123,8 @@ export default function ConsultPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <header className="bg-white border-b border-gray-100 px-4 py-3 sticky top-0 z-10">
+    <div className="h-dvh bg-gray-50 flex flex-col overflow-hidden">
+      <header className="bg-white border-b border-gray-100 px-4 py-3 flex-shrink-0 z-10">
         <div className="max-w-2xl mx-auto space-y-2">
           <div className="flex items-center gap-3">
             <Link href="/" className="text-gray-400 hover:text-gray-600 text-xl">←</Link>
@@ -158,7 +160,20 @@ export default function ConsultPage() {
                     : "bg-white border-gray-200 text-gray-600 hover:border-indigo-300"
                 }`}
               >
-                {p.label}
+                📁 {p.label}
+              </button>
+            ))}
+            {recentTags.map((t) => (
+              <button
+                key={t.slug}
+                onClick={() => switchContext(t.slug)}
+                className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-full border transition-colors ${
+                  tagSlug === t.slug
+                    ? "bg-indigo-600 border-indigo-600 text-white"
+                    : "bg-white border-dashed border-gray-300 text-gray-500 hover:border-indigo-300"
+                }`}
+              >
+                {t.label}
               </button>
             ))}
           </div>
@@ -170,7 +185,7 @@ export default function ConsultPage() {
         </div>
       </header>
 
-      <main className="flex-1 max-w-2xl mx-auto w-full px-4 py-4 space-y-3 overflow-y-auto">
+      <main className="flex-1 min-h-0 max-w-2xl mx-auto w-full px-4 py-4 space-y-3 overflow-y-auto">
         {messages.length === 0 && (
           <div className="text-center py-16 space-y-2">
             <p className="text-3xl">💬</p>
@@ -198,7 +213,7 @@ export default function ConsultPage() {
         <div ref={bottomRef} />
       </main>
 
-      <div className="bg-white border-t border-gray-100 px-4 py-3 sticky bottom-0">
+      <div className="bg-white border-t border-gray-100 px-4 pt-3 flex-shrink-0 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
         <div className="max-w-2xl mx-auto flex gap-2 items-end">
           <textarea
             value={input}

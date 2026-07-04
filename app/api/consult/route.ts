@@ -17,17 +17,63 @@ export async function GET(request: NextRequest) {
 
   const tagSlug = request.nextUrl.searchParams.get("tag") || null;
 
-  const [projects, context] = await Promise.all([
+  const PROJECT_ACTIVE_DAYS = 90; // この期間キャプチャが無いプロジェクトは候補から自然に消える
+  const RECENT_TAG_DAYS = 30;
+  const RECENT_TAG_MIN_COUNT = 2;
+
+  const [tagDefs, recentCaptures, context] = await Promise.all([
     prisma.captureTagDef.findMany({
-      where: { active: true, isProject: true },
-      select: { slug: true, label: true },
+      where: { active: true },
+      select: { slug: true, label: true, isProject: true, createdAt: true },
       orderBy: { sortOrder: "asc" },
+    }),
+    prisma.capture.findMany({
+      where: {
+        userId: user.id,
+        createdAt: { gte: new Date(Date.now() - PROJECT_ACTIVE_DAYS * 24 * 60 * 60 * 1000) },
+      },
+      select: { tags: true, createdAt: true },
     }),
     buildConsultContext(user.id, tagSlug),
   ]);
 
+  // タグごとの直近利用状況を集計
+  const recentThreshold = Date.now() - RECENT_TAG_DAYS * 24 * 60 * 60 * 1000;
+  const usedIn90d = new Set<string>();
+  const countIn30d = new Map<string, number>();
+  for (const c of recentCaptures) {
+    for (const t of c.tags) {
+      usedIn90d.add(t);
+      if (c.createdAt.getTime() >= recentThreshold) {
+        countIn30d.set(t, (countIn30d.get(t) ?? 0) + 1);
+      }
+    }
+  }
+
+  // プロジェクトタグ: 直近90日に利用があるもの + 登録から30日以内の新規(まだ0件でも表示)
+  const projects = tagDefs
+    .filter((t) => t.isProject)
+    .filter((t) => usedIn90d.has(t.slug) || t.createdAt.getTime() >= recentThreshold)
+    .map((t) => ({ slug: t.slug, label: t.label }));
+
+  // 最近よく出てくるトピック: 直近30日に2件以上あるタグ(プロジェクト/inbox/clipを除く)を件数順で最大5個
+  const projectSlugs = new Set(projects.map((p) => p.slug));
+  const labelBySlug = new Map(tagDefs.map((t) => [t.slug, t.label]));
+  const recentTags = Array.from(countIn30d.entries())
+    .filter(([slug, count]) =>
+      count >= RECENT_TAG_MIN_COUNT &&
+      !projectSlugs.has(slug) &&
+      slug !== "inbox" &&
+      slug !== "clip" &&
+      labelBySlug.has(slug)
+    )
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([slug]) => ({ slug, label: labelBySlug.get(slug)! }));
+
   return NextResponse.json({
     projects,
+    recentTags,
     breakdown: {
       meetings: context.meetingCount,
       memos: context.memoCount,
