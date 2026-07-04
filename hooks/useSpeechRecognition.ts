@@ -13,12 +13,14 @@ declare global {
   }
 }
 
-export function useSpeechRecognition() {
+export function useSpeechRecognition(options?: { onError?: (code: string) => void }) {
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(true);
   const recognitionRef = useRef<ISpeechRecognition | null>(null);
   const interimRef = useRef<string>("");
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   const start = useCallback(() => {
     const SpeechRecognitionAPI =
@@ -60,6 +62,7 @@ export function useSpeechRecognition() {
     recognition.onerror = (event: any) => {
       if (event.error !== "no-speech") {
         console.error("Speech recognition error:", event.error);
+        optionsRef.current?.onError?.(event.error);
       }
     };
 

@@ -16,7 +16,7 @@ export async function GET() {
     where: { userId: user.id },
     orderBy: { updatedAt: "desc" },
     take: 50,
-    select: { id: true, title: true, mode: true, tagSlug: true, updatedAt: true },
+    select: { id: true, title: true, mode: true, tagSlug: true, updatedAt: true, sentToObsidianAt: true },
   });
 
   // 文脈タグのラベルを付ける(タグが候補から消えた後も履歴では表示できるように)

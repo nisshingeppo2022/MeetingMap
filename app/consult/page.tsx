@@ -27,6 +27,7 @@ interface SessionSummary {
   tagSlug: string | null;
   tagLabel: string | null;
   updatedAt: string;
+  sentToObsidianAt: string | null;
 }
 
 type ConsultMode = "recent" | "tag" | "none";
@@ -49,7 +50,15 @@ export default function ConsultPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   // 音声入力(録音ページと同じフックを使用)
-  const { segments, isListening, isSupported, start: startSpeech, stop: stopSpeech } = useSpeechRecognition();
+  const { segments, isListening, isSupported, start: startSpeech, stop: stopSpeech } = useSpeechRecognition({
+    onError: (code) => {
+      if (code === "not-allowed" || code === "service-not-allowed") {
+        showToast("マイクが許可されていません。設定を確認するか、キーボードのマイクをご利用ください");
+      } else {
+        showToast(`音声入力エラー(${code})。キーボードのマイクもご利用いただけます`);
+      }
+    },
+  });
   const speechBaseTextRef = useRef("");
   const speechBaseCountRef = useRef(0);
 
@@ -88,13 +97,21 @@ export default function ConsultPage() {
     }
   }, [segments, isListening]);
 
-  function toggleMic() {
+  async function toggleMic() {
     if (isListening) {
       stopSpeech();
       return;
     }
     if (!isSupported) {
       showToast("この端末では音声入力が使えません。キーボードのマイクをご利用ください");
+      return;
+    }
+    // PWA(ホーム画面版)では先にマイク権限を明示的に取得しないと認識が始まらないことがある
+    try {
+      const media = await navigator.mediaDevices.getUserMedia({ audio: true });
+      media.getTracks().forEach((t) => t.stop());
+    } catch {
+      showToast("マイクの使用が許可されていません。iPhoneの設定をご確認ください");
       return;
     }
     speechBaseTextRef.current = input ? `${input} ` : "";
@@ -244,14 +261,18 @@ export default function ConsultPage() {
       const res = await fetch("/api/consult/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages, mode, tagSlug }),
+        body: JSON.stringify({ messages, mode, tagSlug, sessionId }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error ?? "送信に失敗しました");
       }
       const data = await res.json();
-      showToast(`Obsidianへ送りました${data.label ? ` #${data.label}` : ""}`);
+      if (data.skipped) {
+        showToast(data.message ?? "新しいやりとりがありません");
+      } else {
+        showToast(`Obsidianへ送りました${data.label ? ` #${data.label}` : ""}`);
+      }
     } catch (e) {
       showToast(e instanceof Error ? e.message : "送信に失敗しました");
     } finally {
@@ -359,11 +380,15 @@ export default function ConsultPage() {
                 }`}
               >
                 <button onClick={() => resumeSession(s.id)} className="flex-1 min-w-0 text-left active:opacity-60 transition-opacity">
-                  <p className="text-sm font-medium text-gray-800 truncate">{s.title}</p>
+                  <p className="text-sm font-medium text-gray-800 truncate">
+                    {s.sentToObsidianAt && <span title="Obsidianへ送信済み">🗂️ </span>}
+                    {s.title}
+                  </p>
                   <p className="text-xs text-gray-400 mt-0.5">
                     {new Date(s.updatedAt).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                     {" · "}
                     {s.mode === "none" ? "文脈なし" : s.mode === "recent" ? "最近2週間" : s.tagLabel ?? s.tagSlug}
+                    {s.sentToObsidianAt && " · Obsidian送信済み"}
                   </p>
                 </button>
                 <button
