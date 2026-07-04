@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 
 interface TagChip {
   slug: string;
@@ -30,9 +31,6 @@ interface SessionSummary {
 
 type ConsultMode = "recent" | "tag" | "none";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ISpeechRecognition = any;
-
 export default function ConsultPage() {
   const [projects, setProjects] = useState<TagChip[]>([]);
   const [recentTags, setRecentTags] = useState<TagChip[]>([]);
@@ -49,10 +47,11 @@ export default function ConsultPage() {
   const [showHistory, setShowHistory] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [listening, setListening] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<ISpeechRecognition | null>(null);
-  const inputBeforeSpeechRef = useRef("");
+  // 音声入力(録音ページと同じフックを使用)
+  const { segments, isListening, isSupported, start: startSpeech, stop: stopSpeech } = useSpeechRecognition();
+  const speechBaseTextRef = useRef("");
+  const speechBaseCountRef = useRef(0);
 
   useEffect(() => {
     async function loadContext() {
@@ -80,54 +79,27 @@ export default function ConsultPage() {
   }
 
   // --- 音声入力 ---
-  function stopMic() {
-    if (recognitionRef.current) {
-      recognitionRef.current.onend = null;
-      recognitionRef.current.stop();
-      recognitionRef.current = null;
+  // 認識確定した発話(segments)のうち、今回のマイク起動以降の分を入力欄に反映する
+  useEffect(() => {
+    if (!isListening) return;
+    const newSegments = segments.slice(speechBaseCountRef.current);
+    if (newSegments.length > 0) {
+      setInput(speechBaseTextRef.current + newSegments.map((s) => s.text).join(" "));
     }
-    setListening(false);
-  }
+  }, [segments, isListening]);
 
   function toggleMic() {
-    if (listening) {
-      stopMic();
+    if (isListening) {
+      stopSpeech();
       return;
     }
-    const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognitionAPI) {
-      showToast("この端末では音声入力が使えません");
+    if (!isSupported) {
+      showToast("この端末では音声入力が使えません。キーボードのマイクをご利用ください");
       return;
     }
-    const recognition = new SpeechRecognitionAPI();
-    recognition.lang = "ja-JP";
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    inputBeforeSpeechRef.current = input ? `${input} ` : "";
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    recognition.onresult = (event: any) => {
-      let finalText = "";
-      let interim = "";
-      for (let i = 0; i < event.results.length; i++) {
-        const result = event.results[i];
-        if (result.isFinal) finalText += result[0].transcript;
-        else interim += result[0].transcript;
-      }
-      setInput(inputBeforeSpeechRef.current + finalText + interim);
-    };
-    recognition.onend = () => {
-      recognitionRef.current = null;
-      setListening(false);
-    };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    recognition.onerror = (event: any) => {
-      if (event.error !== "no-speech") showToast("音声入力でエラーが発生しました");
-    };
-
-    recognitionRef.current = recognition;
-    recognition.start();
-    setListening(true);
+    speechBaseTextRef.current = input ? `${input} ` : "";
+    speechBaseCountRef.current = segments.length;
+    startSpeech();
   }
 
   function confirmDiscard(): boolean {
@@ -229,6 +201,18 @@ export default function ConsultPage() {
         setMessages(nextMessages);
         setCanRetry(true);
         showToast("応答が空でした。時間を置いて再送してください");
+      } else {
+        // 会話全文を履歴に保存(サーバーはストリーム完了後の処理を保証できないためクライアントから)
+        const sid = newSessionId ?? sessionId;
+        if (sid) {
+          fetch(`/api/consult/sessions/${sid}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              messages: [...nextMessages, { role: "assistant", content: assistantText }],
+            }),
+          }).catch(() => {});
+        }
       }
     } catch (e) {
       setMessages(nextMessages);
@@ -242,7 +226,7 @@ export default function ConsultPage() {
   async function handleSend() {
     const text = input.trim();
     if (!text || streaming) return;
-    stopMic();
+    if (isListening) stopSpeech();
     setInput("");
     await sendConversation([...messages, { role: "user", content: text }]);
   }
@@ -439,9 +423,9 @@ export default function ConsultPage() {
           <div className="max-w-2xl mx-auto flex gap-2 items-end">
             <button
               onClick={toggleMic}
-              title={listening ? "音声入力を停止" : "音声入力"}
+              title={isListening ? "音声入力を停止" : "音声入力"}
               className={`flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-full transition-all active:scale-90 ${
-                listening
+                isListening
                   ? "bg-red-500 text-white animate-pulse"
                   : "bg-gray-100 hover:bg-gray-200 text-gray-600"
               }`}
@@ -451,7 +435,7 @@ export default function ConsultPage() {
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={listening ? "話してください..." : "相談したいことを入力..."}
+              placeholder={isListening ? "話してください...(もう一度🎤で停止)" : "相談したいことを入力..."}
               rows={1}
               className="flex-1 px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-900 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"
               onInput={(e) => {

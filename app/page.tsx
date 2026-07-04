@@ -7,7 +7,7 @@ export default async function HomePage() {
   const supabase = await createServerSupabaseClient();
   const { data: { user } } = await supabase.auth.getUser();
 
-  const [meetings, contactCount, pendingActions] = user
+  const [meetings, meetingCount, contactCount, pendingActions] = user
     ? await Promise.all([
         prisma.meeting.findMany({
           where: { userId: user.id },
@@ -18,6 +18,7 @@ export default async function HomePage() {
             meetingContacts: { include: { contact: { select: { name: true } } } },
           },
         }),
+        prisma.meeting.count({ where: { userId: user.id } }),
         prisma.contact.count({ where: { userId: user.id } }),
         prisma.mindmapNode.count({
           where: {
@@ -27,7 +28,7 @@ export default async function HomePage() {
           },
         }),
       ])
-    : [[], 0, 0];
+    : [[], 0, 0, 0];
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
@@ -60,7 +61,7 @@ export default async function HomePage() {
         {/* サマリー */}
         <div className="grid grid-cols-3 gap-3">
           <div className="bg-white rounded-xl border border-gray-100 p-3 shadow-sm text-center">
-            <p className="text-2xl font-bold text-indigo-600">{meetings.length}</p>
+            <p className="text-2xl font-bold text-indigo-600">{meetingCount}</p>
             <p className="text-xs text-gray-400 mt-0.5">ミーティング</p>
           </div>
           <Link href="/contacts" className="bg-white rounded-xl border border-gray-100 p-3 shadow-sm text-center hover:border-indigo-300 transition-colors">
