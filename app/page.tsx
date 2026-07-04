@@ -49,6 +49,14 @@ export default async function HomePage() {
           🎙️ 新しいミーティングを始める
         </Link>
 
+        {/* 相談モード（スマホ壁打ち） */}
+        <Link
+          href="/consult"
+          className="block w-full bg-white border border-indigo-200 hover:border-indigo-400 text-indigo-700 text-center font-semibold py-3 rounded-2xl transition-colors shadow-sm"
+        >
+          💬 AIに相談する
+        </Link>
+
         {/* サマリー */}
         <div className="grid grid-cols-3 gap-3">
           <div className="bg-white rounded-xl border border-gray-100 p-3 shadow-sm text-center">

@@ -63,6 +63,77 @@ export async function generateContent(
   return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
 }
 
+export interface ChatMessage {
+  role: "user" | "model";
+  text: string;
+}
+
+// マルチターン会話をSSEでストリーミング生成する（相談モード用）
+// 戻り値はテキスト断片を流すReadableStream（Response bodyにそのまま渡せる）
+export async function generateContentStream(
+  messages: ChatMessage[],
+  systemPrompt: string,
+  options: GenerateOptions = {}
+): Promise<ReadableStream<Uint8Array>> {
+  const { model = "gemini-2.5-flash", temperature = 0.7 } = options;
+
+  const apiKey = process.env.GEMINI_API_KEY!;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: messages.map((m) => ({ role: m.role, parts: [{ text: m.text }] })),
+      generationConfig: { temperature },
+    }),
+  });
+
+  if (!res.ok || !res.body) {
+    const err = await res.text().catch(() => "");
+    console.error(`Gemini stream API error: ${res.status}`, err.slice(0, 500));
+    if (res.status === 429) {
+      throw new Error("APIのレート制限に達しました。1〜2分待ってから再試行してください。");
+    }
+    throw new Error(`Gemini APIエラー (${res.status})`);
+  }
+
+  // GeminiのSSE（data: {...}行）からテキスト断片だけを取り出して流し直す
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = "";
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const payload = line.slice("data: ".length).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          const json = JSON.parse(payload);
+          const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text) controller.enqueue(encoder.encode(text));
+        } catch {
+          // 不完全なJSON行はスキップ（次チャンクと結合されないSSE仕様外の断片対策）
+        }
+      }
+    },
+    cancel(reason) {
+      reader.cancel(reason);
+    },
+  });
+}
+
 export const ANALYZE_PROMPT = `あなたはミーティングの内容を分析してマインドマップを生成するアシスタントです。
 
 ## 入力
@@ -224,6 +295,35 @@ export const CAPTURE_TAG_PROMPT = `以下は音声入力またはテキストで
 - どのタグにも自信を持って当てはまらない場合は tags: ["inbox"], confidence: "low" を返す
 - 音声入力由来のため句読点の欠落や誤変換を含むことがある。多少の誤変換は許容し、文意を推定して判定する
 - 本文の書き換え・要約は行わない(判定のみ行う)
+- 日本語で出力`;
+
+export const CONSULT_SYSTEM_PROMPT = `あなたはこのプロジェクトの経緯を全て知る壁打ち相手です。
+提供される文脈には、会議の議事録（[議事録]）と本人の独り言・音声メモ（[メモ]）、
+他者の文章のクリップ（[クリップ]）が含まれます。
+
+## 振る舞い
+- 会議記録と本人の独り言・クリップを区別して扱う
+- 矛盾や未決事項に気づいたら指摘する
+- 決定を急かさない。相手が考えを整理するのを手伝う
+- 文脈にない事実を創作しない。知らないことは知らないと言う
+- 相手はスマホから短文で話しかけてくる。返答は簡潔に、必要なら箇条書きで
+- 日本語で応答する`;
+
+export const CONSULT_SAVE_PROMPT = `以下はプロジェクトに関する壁打ち相談の会話全文です。
+この相談の成果を抽出し、そのままMarkdownとして出力してください（JSON不要、コードブロック不要）:
+
+## 決定したこと
+- （箇条書き。なければ「なし」）
+
+## 生まれたToDo
+- （箇条書き。なければ「なし」）
+
+## 新しい気づき
+- （箇条書き。なければ「なし」）
+
+## ルール
+- 会話に出てきた内容のみを書く（創作しない）
+- 各項目は1行で簡潔に
 - 日本語で出力`;
 
 export const CLIP_ENRICH_PROMPT = `以下は他者の文章・記事からの引用/クリップです。

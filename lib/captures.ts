@@ -78,6 +78,78 @@ ${content}`;
   }
 }
 
+// クイックキャプチャ系UIのallowlist(13章)。環境変数未設定なら全認証ユーザーに許可
+// (現状1人運用のため。他ユーザーへの露出を止めたくなったら Vercel に設定する)
+export function isQuickCaptureAllowed(userId: string): boolean {
+  const raw = process.env.QUICK_CAPTURE_ALLOWED_USER_IDS;
+  if (!raw || !raw.trim()) return true;
+  return raw.split(",").map((s) => s.trim()).filter(Boolean).includes(userId);
+}
+
+export interface ConsultContext {
+  contextText: string;
+  meetingCount: number;
+  memoCount: number;
+  clipCount: number;
+}
+
+const CONSULT_MAX_CAPTURES = 50;
+const CONSULT_RECENT_DAYS = 14;
+
+// 相談モードの文脈を captures から組み立てる(14.2)。
+// tagSlug指定時はそのタグのcaptures、未指定時は直近2週間のタグ横断。
+// source=meetingmap の議事録は件数枠とは別に必ず含める
+export async function buildConsultContext(
+  userId: string,
+  tagSlug: string | null
+): Promise<ConsultContext> {
+  const baseWhere = tagSlug
+    ? { userId, tags: { has: tagSlug } }
+    : { userId, createdAt: { gte: new Date(Date.now() - CONSULT_RECENT_DAYS * 24 * 60 * 60 * 1000) } };
+
+  const [memos, meetings] = await Promise.all([
+    prisma.capture.findMany({
+      where: { ...baseWhere, source: { not: "meetingmap" } },
+      orderBy: { createdAt: "desc" },
+      take: CONSULT_MAX_CAPTURES,
+      select: { source: true, content: true, summary: true, why: true, url: true, createdAt: true },
+    }),
+    prisma.capture.findMany({
+      where: { ...baseWhere, source: "meetingmap" },
+      orderBy: { createdAt: "desc" },
+      select: { source: true, content: true, createdAt: true },
+    }),
+  ]);
+
+  const fmtDate = (d: Date) =>
+    d.toLocaleDateString("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" });
+
+  const sections: string[] = [];
+  for (const m of meetings) {
+    sections.push(`[議事録 ${fmtDate(m.createdAt)}]\n${m.content}`);
+  }
+  let clipCount = 0;
+  // 古い順に並べ直して時系列で読めるようにする
+  for (const c of [...memos].reverse()) {
+    if (c.source === "clip") {
+      clipCount++;
+      const meta = [c.summary && `要約: ${c.summary}`, c.why && `なぜ: ${c.why}`, c.url && `出典: ${c.url}`]
+        .filter(Boolean)
+        .join(" / ");
+      sections.push(`[クリップ ${fmtDate(c.createdAt)}]${meta ? `\n(${meta})` : ""}\n${c.content}`);
+    } else {
+      sections.push(`[メモ ${fmtDate(c.createdAt)}]\n${c.content}`);
+    }
+  }
+
+  return {
+    contextText: sections.join("\n\n---\n\n"),
+    meetingCount: meetings.length,
+    memoCount: memos.length - clipCount,
+    clipCount,
+  };
+}
+
 export interface ClipEnrichment {
   summary: string;
   useFor: string[];

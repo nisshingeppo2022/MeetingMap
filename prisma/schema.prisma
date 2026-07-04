@@ -235,6 +235,7 @@ enum CaptureSource {
   obsidian
   meetingmap
   clip
+  consult
 }
 
 model Capture {

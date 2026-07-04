@@ -40,3 +40,6 @@ next-env.d.ts
 
 # 本番DB接続情報を扱う一時スクリプト（誤コミット防止）
 scripts/migrate-to-prod.mjs
+
+# supabase CLI の一時ファイル
+supabase/.temp/
