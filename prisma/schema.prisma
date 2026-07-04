@@ -49,6 +49,7 @@ model Meeting {
   mindmapNodes        MindmapNode[]
   topicItemMeetings   TopicItemMeeting[]
   meetingTopics       MeetingTopic[]
+  captures            Capture[]
 
   @@map("meetings")
 }
@@ -225,4 +226,53 @@ enum ViewType {
   full_map
   topic
   meeting
+}
+
+enum CaptureSource {
+  shortcut
+  voice
+  line
+  obsidian
+  meetingmap
+}
+
+model Capture {
+  id               String        @id @default(uuid())
+  userId           String        @map("user_id")
+  source           CaptureSource
+  content          String
+  tags             String[]      @default([])
+  meetingId        String?       @map("meeting_id")
+  lineMessageId    String?       @unique @map("line_message_id")
+  syncedToObsidian Boolean       @default(false) @map("synced_to_obsidian")
+  createdAt        DateTime      @default(now()) @map("created_at")
+
+  meeting Meeting? @relation(fields: [meetingId], references: [id])
+
+  @@index([userId, tags])
+  @@index([userId, syncedToObsidian])
+  @@map("captures")
+}
+
+model CaptureTagDef {
+  slug        String   @id
+  label       String
+  description String?
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(100) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("capture_tag_defs")
+}
+
+model DeviceToken {
+  id         String    @id @default(uuid())
+  userId     String    @map("user_id")
+  tokenHash  String    @unique @map("token_hash")
+  deviceName String?   @map("device_name")
+  active     Boolean   @default(true)
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastUsedAt DateTime? @map("last_used_at")
+
+  @@map("device_tokens")
 }
