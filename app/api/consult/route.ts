@@ -159,16 +159,20 @@ export async function POST(request: NextRequest) {
     sessionId = created.id;
   }
 
+  // _soul.md(本人の価値観・トーンルール)。同期スクリプトがapp_configに反映している
+  const soulConfig = await prisma.appConfig.findUnique({ where: { key: "soul" } }).catch(() => null);
+  const soulSection = soulConfig ? `\n## 相談相手(本人)について — _soul.md\n${soulConfig.value}\n` : "";
+
   let systemPrompt: string;
   if (mode === "none") {
     systemPrompt = `${CONSULT_SYSTEM_PROMPT}
-
+${soulSection}
 ## プロジェクトの文脈
 (今回は文脈なしの自由な相談です。過去の記録は参照せず、一般的な壁打ち相手として応じてください)`;
   } else {
     const context = await buildConsultContext(user.id, mode === "tag" ? tagSlug : null);
     systemPrompt = `${CONSULT_SYSTEM_PROMPT}
-
+${soulSection}
 ## プロジェクトの文脈(議事録${context.meetingCount}件・メモ${context.memoCount}件・クリップ${context.clipCount}件)
 ${context.contextText || "(まだ文脈になるキャプチャがありません。その旨を伝えた上で、一般的な壁打ち相手として応じてください)"}`;
   }

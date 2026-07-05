@@ -77,11 +77,38 @@ function buildMarkdown(capture) {
   return lines.join("\n");
 }
 
+// _soul.md(本人の価値観・トーンルール)をapp_configへ反映する。
+// 内容が変わった時だけupsertし、consult APIと週次Dreamingが参照する(15.3)
+async function syncSoul() {
+  const soulPath = path.join(VAULT_PATH, "_soul.md");
+  if (!fs.existsSync(soulPath)) return;
+  const value = fs.readFileSync(soulPath, "utf-8").trim();
+  if (!value) return;
+
+  const { data: existing } = await supabase
+    .from("app_config")
+    .select("value")
+    .eq("key", "soul")
+    .maybeSingle();
+  if (existing && existing.value === value) return;
+
+  const { error } = await supabase
+    .from("app_config")
+    .upsert({ key: "soul", value, updated_at: new Date().toISOString() });
+  if (error) {
+    console.error("_soul.md の反映エラー:", error.message);
+  } else {
+    console.log("_soul.md の変更をapp_configへ反映しました。");
+  }
+}
+
 async function main() {
   if (!fs.existsSync(VAULT_PATH)) {
     console.error(`Vaultが見つかりません: ${VAULT_PATH}`);
     process.exit(1);
   }
+
+  await syncSoul();
 
   const { data: projectTagDefs, error: tagDefsError } = await supabase
     .from("capture_tag_defs")

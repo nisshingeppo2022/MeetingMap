@@ -236,6 +236,7 @@ enum CaptureSource {
   meetingmap
   clip
   consult
+  system
 }
 
 model Capture {
@@ -289,6 +290,15 @@ model ConsultSession {
 
   @@index([userId, updatedAt])
   @@map("consult_sessions")
+}
+
+// システム全体の共有設定(service_roleのみアクセス。_soul.md の内容などを保持)
+model AppConfig {
+  key       String   @id
+  value     String
+  updatedAt DateTime @default(now()) @map("updated_at")
+
+  @@map("app_config")
 }
 
 model DeviceToken {
