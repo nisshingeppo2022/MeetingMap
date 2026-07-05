@@ -86,6 +86,33 @@ ${weekSection}`;
     data: { userId, source: "system", content, tags: ["retrospective"] },
   });
 
+  // _soul.mdへの追記候補を抽出してapp_configに積む。
+  // 次のObsidian同期がMac側で _soul.md の「自動追記」セクションへ書き足す(正本はVault側)
+  const soulSectionMatch = content.match(/## _soul\.mdへの追記候補\n([\s\S]*?)(?=\n## |$)/);
+  if (soulSectionMatch) {
+    const candidates = soulSectionMatch[1]
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith("- "))
+      .map((l) => l.slice(2).trim())
+      .filter((l) => l && l !== "なし" && !l.startsWith("("));
+    if (candidates.length > 0) {
+      const existing = await prisma.appConfig.findUnique({ where: { key: "soul_pending" } });
+      let pending: string[] = [];
+      try {
+        pending = existing ? JSON.parse(existing.value) : [];
+      } catch {
+        pending = [];
+      }
+      const value = JSON.stringify([...pending, ...candidates]);
+      await prisma.appConfig.upsert({
+        where: { key: "soul_pending" },
+        create: { key: "soul_pending", value },
+        update: { value, updatedAt: new Date() },
+      });
+    }
+  }
+
   // Discord通知(任意。Webhook未設定なら黙ってスキップ — Obsidianへは同期で届く)
   let discordSent = false;
   const webhook = process.env.DISCORD_WEBHOOK_BRIEF;

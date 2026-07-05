@@ -77,6 +77,42 @@ function buildMarkdown(capture) {
   return lines.join("\n");
 }
 
+// 週次Dreamingが積んだ_soul.mdへの追記候補(app_config: soul_pending)を
+// Vault側の _soul.md の「自動追記」セクションに日付付きで書き足す。
+// 正本はあくまでVault側(追記後にsyncSoulがDBへ反映し直す)
+async function applySoulPending() {
+  const soulPath = path.join(VAULT_PATH, "_soul.md");
+  if (!fs.existsSync(soulPath)) return;
+
+  const { data: pendingRow } = await supabase
+    .from("app_config")
+    .select("value")
+    .eq("key", "soul_pending")
+    .maybeSingle();
+  if (!pendingRow) return;
+
+  let pending = [];
+  try {
+    pending = JSON.parse(pendingRow.value);
+  } catch {
+    pending = [];
+  }
+  if (!Array.isArray(pending) || pending.length === 0) return;
+
+  const today = toJstIso(new Date()).slice(0, 10);
+  let content = fs.readFileSync(soulPath, "utf-8");
+  const heading = "## 自動追記（週次ふりかえりより）";
+  if (!content.includes(heading)) {
+    content = `${content.replace(/\n+$/, "")}\n\n${heading}\n`;
+  }
+  const lines = pending.map((p) => `- ${today}: ${p}`).join("\n");
+  content = `${content.replace(/\n+$/, "")}\n${lines}\n`;
+  fs.writeFileSync(soulPath, content, "utf-8");
+
+  await supabase.from("app_config").delete().eq("key", "soul_pending");
+  console.log(`_soul.md に自動追記 ${pending.length}件(週次ふりかえりより)。`);
+}
+
 // _soul.md(本人の価値観・トーンルール)をapp_configへ反映する。
 // 内容が変わった時だけupsertし、consult APIと週次Dreamingが参照する(15.3)
 async function syncSoul() {
@@ -108,6 +144,7 @@ async function main() {
     process.exit(1);
   }
 
+  await applySoulPending();
   await syncSoul();
 
   const { data: projectTagDefs, error: tagDefsError } = await supabase
