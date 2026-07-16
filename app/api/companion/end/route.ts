@@ -18,9 +18,9 @@ export async function POST(req: NextRequest) {
   if (log.length === 0) return NextResponse.json({ error: "empty session" }, { status: 404 });
 
   // バッファに残っている実際のモード(途中失効対策: ログ側のmodeを優先)
-  const sessionMode = log.some((r: any) => r.mode === "consult") && mode === "consult" ? "consult" : "student";
+  const sessionMode = log.some((r) => r.mode === "consult") && mode === "consult" ? "consult" : "student";
 
-  const fullText = log.map((r: any) => `${r.role === "user" ? "話者" : "相棒"}: ${r.content}`).join("\n");
+  const fullText = log.map((r) => `${r.role === "user" ? "話者" : "相棒"}: ${r.content}`).join("\n");
   const summary = await summarize(fullText);
   const titleLine = summary.split("\n")[0].replace(/^#\s*/, "").trim() || "相棒との対話";
 

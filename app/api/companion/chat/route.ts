@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
         await appendMessage(body.session_id, mode, "user", body.text);
         await appendMessage(body.session_id, mode, "assistant", full);
         send("done", { reply_full: full, mode });
-      } catch (e: any) {
+      } catch {
         send("error", { message: "generation_failed" });
       } finally {
         controller.close();
