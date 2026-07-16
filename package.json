@@ -12,12 +12,14 @@
     "rebuild-digest": "node scripts/rebuild-digest.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.2",
     "@google/generative-ai": "^0.24.1",
     "@prisma/adapter-pg": "^7.4.2",
     "@prisma/client": "^7.4.2",
     "@supabase/ssr": "^0.9.0",
     "@supabase/supabase-js": "^2.98.0",
     "@types/pg": "^8.18.0",
+    "bcryptjs": "^3.0.3",
     "dotenv": "^17.3.1",
     "next": "14.2.35",
     "pg": "^8.20.0",

@@ -4,6 +4,7 @@ interface GenerateOptions {
   thinkingBudget?: number; // 0 = thinking無効（高速・省トークン）
   retries?: number;
   fallbackModel?: string; // レート制限(429)時に自動で切り替える予備モデル(枠が別)
+  maxOutputTokens?: number;
 }
 
 export async function generateContent(
@@ -30,6 +31,12 @@ export async function generateContent(
     body.generationConfig = {
       ...body.generationConfig as object,
       thinkingConfig: { thinkingBudget },
+    };
+  }
+  if (options.maxOutputTokens !== undefined) {
+    body.generationConfig = {
+      ...body.generationConfig as object,
+      maxOutputTokens: options.maxOutputTokens,
     };
   }
 
@@ -86,6 +93,7 @@ export async function generateContentStream(
     model = "gemini-2.5-flash",
     temperature = 0.7,
     fallbackModel = "gemini-2.5-flash-lite",
+    maxOutputTokens,
   } = options;
 
   const apiKey = process.env.GEMINI_API_KEY!;
@@ -97,7 +105,10 @@ export async function generateContentStream(
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: messages.map((msg) => ({ role: msg.role, parts: [{ text: msg.text }] })),
-        generationConfig: { temperature },
+        generationConfig: {
+          temperature,
+          ...(maxOutputTokens !== undefined && { maxOutputTokens }),
+        },
       }),
     });
 

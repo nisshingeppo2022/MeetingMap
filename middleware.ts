@@ -29,7 +29,10 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // 認証不要のパス
-  const publicPaths = ["/auth/login", "/auth/signup", "/share/"];
+  // /api/companion/: ロボホン(Supabaseセッションを持たない)からのアクセス。
+  // 認証はSupabaseセッションではなくdevice_token(JSONボディ)で行い、各routeの
+  // getDevice()/resolveMode()が検証する(lib/companion/auth.ts)
+  const publicPaths = ["/auth/login", "/auth/signup", "/share/", "/api/companion/"];
   const isPublic = publicPaths.some((p) => pathname.startsWith(p));
 
   if (!user && !isPublic) {

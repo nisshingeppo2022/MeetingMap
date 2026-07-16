@@ -237,6 +237,7 @@ enum CaptureSource {
   clip
   consult
   system
+  robohon
 }
 
 model Capture {
@@ -311,4 +312,45 @@ model DeviceToken {
   lastUsedAt DateTime? @map("last_used_at")
 
   @@map("device_tokens")
+}
+
+// ロボホン相棒バックエンド(Companion API)。既存の DeviceToken / ConsultSession とは
+// 別用途・別スキーマのため companion_ プレフィックスの専用テーブルとして分離する。
+model CompanionDeviceToken {
+  id             String    @id @default(uuid())
+  token          String    @unique
+  label          String
+  allowedModes   String[]  @default(["student"]) @map("allowed_modes")
+  failedPinCount Int       @default(0) @map("failed_pin_count")
+  lockedUntil    DateTime? @map("locked_until")
+  revokedAt      DateTime? @map("revoked_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  consultSessions CompanionConsultSession[]
+
+  @@map("companion_device_tokens")
+}
+
+model CompanionConsultSession {
+  id            String   @id @default(uuid())
+  token         String   @unique
+  deviceTokenId String   @map("device_token_id")
+  expiresAt     DateTime @map("expires_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  deviceToken CompanionDeviceToken @relation(fields: [deviceTokenId], references: [id])
+
+  @@map("companion_consult_sessions")
+}
+
+model CompanionMessage {
+  id        BigInt   @id @default(autoincrement())
+  sessionId String   @map("session_id")
+  mode      String
+  role      String
+  content   String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([sessionId, id])
+  @@map("companion_messages")
 }
